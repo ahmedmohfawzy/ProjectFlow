@@ -123,7 +123,7 @@ app.use((req, res, next) => {
     res.setHeader('X-XSS-Protection', '1; mode=block');
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://alcdn.msauth.net https://res.cdn.office.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://date.nager.at https://fonts.googleapis.com https://fonts.gstatic.com https://alcdn.msauth.net https://login.microsoftonline.com https://graph.microsoft.com https://*.dynamics.com https://*.crm.dynamics.com; frame-ancestors 'self' https://teams.microsoft.com https://*.teams.microsoft.com https://*.office.com https://*.microsoft.com");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://alcdn.msauth.net https://res.cdn.office.net https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://cdn.sheetjs.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://date.nager.at https://fonts.googleapis.com https://fonts.gstatic.com https://alcdn.msauth.net https://login.microsoftonline.com https://graph.microsoft.com https://*.dynamics.com https://*.crm.dynamics.com; frame-ancestors 'self' https://teams.microsoft.com https://*.teams.microsoft.com https://*.office.com https://*.microsoft.com");
     next();
 });
 

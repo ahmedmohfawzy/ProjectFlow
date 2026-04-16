@@ -1,11 +1,9 @@
 /**
  * ProjectFlow - Main ESM Entry Point
+ *
+ * External libraries (Dexie, jsPDF, XLSX, MSAL, Teams SDK) are loaded
+ * via CDN <script> tags in index.html to avoid bundling issues.
  */
 
-// 1. Load External Libraries
-import './lib/dexie.min.js';
-import './lib/jspdf.umd.min.js';
-import './lib/xlsx.full.min.js';
-
-// 2. Main Application Bootstrapper
+// Main Application Bootstrapper
 import './app.js';
