@@ -210,31 +210,52 @@ import * as msal from '@azure/msal-browser';
 
     async function getMyPlans() {
         try {
-            const tasksData = await _call('GET', '/me/planner/tasks');
-            const tasks = tasksData.value || [];
+            // Get all groups the user is a member of, then fetch their plans in parallel
+            const [myTasksData, groupsData] = await Promise.allSettled([
+                _call('GET', '/me/planner/tasks?$select=planId&$top=100'),
+                _call('GET', '/me/memberOf?$select=id,displayName&$top=100'),
+            ]);
 
-            // Extract unique planIds
             const planIdSet = new Set();
-            tasks.forEach(t => {
-                if (t.planId) planIdSet.add(t.planId);
-            });
 
-            // Fetch each plan details
-            const plans = [];
-            for (const planId of planIdSet) {
-                try {
-                    const plan = await _call('GET', `/planner/plans/${planId}`);
-                    plans.push({
-                        id: plan.id,
-                        title: plan.title,
-                        owner: plan.owner,
-                        createdBy: plan.createdBy,
-                    });
-                } catch (err) {
-                    // Skip plans we can't access
-                }
+            // Collect plan IDs from tasks
+            if (myTasksData.status === 'fulfilled') {
+                (myTasksData.value?.value || []).forEach(t => {
+                    if (t.planId) planIdSet.add(t.planId);
+                });
             }
 
+            // Collect plans from groups (finds plans even if user has no tasks)
+            if (groupsData.status === 'fulfilled') {
+                const groups = (groupsData.value?.value || []).filter(g => g['@odata.type'] === '#microsoft.graph.group');
+                const groupPlansResults = await Promise.allSettled(
+                    groups.slice(0, 20).map(g => _call('GET', `/groups/${g.id}/planner/plans`))
+                );
+                groupPlansResults.forEach(r => {
+                    if (r.status === 'fulfilled') {
+                        (r.value?.value || []).forEach(p => planIdSet.add(p.id));
+                    }
+                });
+            }
+
+            if (planIdSet.size === 0) return [];
+
+            // Fetch all plan details in parallel
+            const planResults = await Promise.allSettled(
+                [...planIdSet].map(id => _call('GET', `/planner/plans/${id}`))
+            );
+
+            const plans = planResults
+                .filter(r => r.status === 'fulfilled' && r.value?.id)
+                .map(r => ({
+                    id: r.value.id,
+                    title: r.value.title || '(Untitled)',
+                    owner: r.value.owner,
+                    createdBy: r.value.createdBy,
+                }));
+
+            // Sort alphabetically
+            plans.sort((a, b) => a.title.localeCompare(b.title));
             return plans;
         } catch (err) {
             throw new Error(`getMyPlans failed: ${err.message}`);
@@ -464,16 +485,19 @@ import * as msal from '@azure/msal-browser';
         try {
             const { plan, buckets, tasks } = await getPlanDetails(planId);
 
-            // Fetch task details for all tasks
+            // Fetch ALL task details in parallel (much faster than sequential)
+            const BATCH = 10; // max concurrent requests
             const taskDetailsMap = {};
-            for (const task of tasks) {
-                try {
-                    const details = await getPlanTaskDetails(task.id);
-                    taskDetailsMap[task.id] = details;
-                } catch (err) {
-                    // Continue even if details fail
-                    taskDetailsMap[task.id] = {};
-                }
+
+            for (let i = 0; i < tasks.length; i += BATCH) {
+                const batch = tasks.slice(i, i + BATCH);
+                const results = await Promise.allSettled(
+                    batch.map(t => getPlanTaskDetails(t.id))
+                );
+                results.forEach((r, idx) => {
+                    const id = batch[idx].id;
+                    taskDetailsMap[id] = r.status === 'fulfilled' ? r.value : {};
+                });
             }
 
             const project = plannerToProject(plan, buckets, tasks, taskDetailsMap);
