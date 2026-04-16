@@ -13,7 +13,7 @@ import * as msal from '@azure/msal-browser';
 
     let msalApp = null;
     const CONFIG_KEY = 'pf_msgraph_config';
-    const SCOPES = ['Tasks.ReadWrite', 'Group.Read.All', 'User.Read', 'offline_access'];
+    const SCOPES = ['Tasks.ReadWrite', 'Group.Read.All', 'User.Read', 'User.ReadBasic.All', 'offline_access'];
     const GRAPH_ENDPOINT = 'https://graph.microsoft.com/v1.0';
     let autoSyncInterval = null;
 
@@ -234,7 +234,7 @@ import * as msal from '@azure/msal-browser';
             // Fetch ALL tasks and ALL group memberships (follow pagination)
             const [myTasks, allMemberships] = await Promise.allSettled([
                 _fetchAllPages('/me/planner/tasks?$select=planId&$top=100'),
-                _fetchAllPages('/me/memberOf?$select=id,displayName,@odata.type&$top=100'),
+                _fetchAllPages('/me/memberOf?$select=id,displayName&$top=100'),
             ]);
 
             const planIdSet = new Set();
@@ -246,9 +246,11 @@ import * as msal from '@azure/msal-browser';
 
             // Collect plans from ALL groups (no 20-group limit)
             if (allMemberships.status === 'fulfilled') {
+                // Filter to groups only — @odata.type is returned as metadata even without $select
                 const groups = allMemberships.value.filter(
                     g => g['@odata.type'] === '#microsoft.graph.group'
-                        || g['odata.type']  === 'Microsoft.DirectoryServices.Group'
+                      || g['@odata.type'] === '#microsoft.graph.Group'
+                      || (g.id && g.displayName && !g.userPrincipalName)  // fallback: groups have no UPN
                 );
                 const BATCH = 10; // parallel group-plan fetches
                 for (let i = 0; i < groups.length; i += BATCH) {
@@ -371,14 +373,22 @@ import * as msal from '@azure/msal-browser';
             for (let i = 0; i < missing.length; i += BATCH) {
                 const batch = missing.slice(i, i + BATCH);
                 const results = await Promise.allSettled(
-                    batch.map(id => _call('GET', `/users/${id}?$select=displayName,mail`))
+                    batch.map(id =>
+                        _call('GET', `/users/${id}?$select=displayName,userPrincipalName,mail`)
+                    )
                 );
                 results.forEach((r, idx) => {
                     const id = batch[idx];
-                    if (r.status === 'fulfilled' && r.value?.displayName) {
-                        _userCache.set(id, r.value.displayName);
+                    if (r.status === 'fulfilled' && r.value) {
+                        const v = r.value;
+                        // Use best available name: displayName → first part of UPN → mail prefix
+                        const name = v.displayName
+                            || (v.userPrincipalName ? v.userPrincipalName.split('@')[0] : null)
+                            || (v.mail ? v.mail.split('@')[0] : null)
+                            || id.substring(0, 8) + '…';
+                        _userCache.set(id, name);
                     } else {
-                        // Fallback: show first 8 chars of UUID
+                        // Permission denied or not found — keep UUID short form
                         _userCache.set(id, id.substring(0, 8) + '…');
                     }
                 });
@@ -426,7 +436,15 @@ import * as msal from '@azure/msal-browser';
         });
 
         sortedBuckets.forEach(bucket => {
-            const bucketTasks = tasks.filter(t => t.bucketId === bucket.id);
+            // Sort tasks within bucket by orderHint (same ordering Planner uses)
+            const bucketTasks = tasks
+                .filter(t => t.bucketId === bucket.id)
+                .sort((a, b) => {
+                    if (!a.orderHint && !b.orderHint) return 0;
+                    if (!a.orderHint) return 1;
+                    if (!b.orderHint) return -1;
+                    return a.orderHint.localeCompare(b.orderHint);
+                });
 
             // Compute bucket date range from its children
             let bucketStart = null;
@@ -488,10 +506,15 @@ import * as msal from '@azure/msal-browser';
                 ));
 
                 // Resolve assignment user IDs → display names
+                // Priority: resolved display name → cached → assignedBy name → short UUID
                 const resourceNames = [];
                 if (task.assignments && typeof task.assignments === 'object') {
-                    Object.keys(task.assignments).forEach(userId => {
-                        const name = userIdToName[userId] || _userCache.get(userId) || null;
+                    Object.entries(task.assignments).forEach(([userId, assignment]) => {
+                        const name = userIdToName[userId]
+                            || _userCache.get(userId)
+                            || assignment?.assignedBy?.user?.displayName
+                            || assignment?.createdBy?.user?.displayName
+                            || null;
                         if (name) resourceNames.push(name);
                     });
                 }
@@ -621,20 +644,39 @@ import * as msal from '@azure/msal-browser';
                 });
             }
 
-            // Collect all unique user IDs from task assignments
+            // ── Strategy 1: Fetch group members (uses Group.Read.All — always works) ──
+            // The plan.owner is the Microsoft 365 Group ID that owns the plan.
+            // Group members always have displayName and are the source of truth for assignments.
+            const userIdToName = {};
+            if (plan.owner) {
+                try {
+                    const members = await _fetchAllPages(
+                        `/groups/${plan.owner}/members?$select=id,displayName,userPrincipalName&$top=100`
+                    );
+                    members.forEach(m => {
+                        if (m.id && (m.displayName || m.userPrincipalName)) {
+                            const name = m.displayName || m.userPrincipalName.split('@')[0];
+                            userIdToName[m.id] = name;
+                            _userCache.set(m.id, name); // cache for merge/sync use
+                        }
+                    });
+                } catch (e) {
+                    console.warn('[MSGraph] Could not fetch group members:', e.message);
+                }
+            }
+
+            // ── Strategy 2: Fallback — try /users/{id} for any still-unresolved IDs ──
             const allUserIds = new Set();
             tasks.forEach(task => {
                 if (task.assignments && typeof task.assignments === 'object') {
-                    Object.keys(task.assignments).forEach(uid => allUserIds.add(uid));
+                    Object.keys(task.assignments).forEach(uid => {
+                        if (!userIdToName[uid]) allUserIds.add(uid);
+                    });
                 }
             });
-
-            // Resolve user IDs → display names (cached)
-            const userIdToName = {};
             if (allUserIds.size > 0) {
-                const ids = [...allUserIds];
-                await _resolveUserDisplayNames(ids);
-                ids.forEach(id => {
+                await _resolveUserDisplayNames([...allUserIds]);
+                allUserIds.forEach(id => {
                     const name = _userCache.get(id);
                     if (name) userIdToName[id] = name;
                 });
@@ -686,29 +728,21 @@ import * as msal from '@azure/msal-browser';
         try {
             const summary = { updated: 0, created: 0, failed: 0 };
 
-            const collectLeafTasks = (tasks, leaves = []) => {
-                tasks.forEach(t => {
-                    if (t.children && t.children.length > 0) {
-                        collectLeafTasks(t.children, leaves);
-                    } else {
-                        leaves.push(t);
-                    }
-                });
-                return leaves;
-            };
-
-            const leafTasks = collectLeafTasks(project.tasks);
+            // Only push leaf tasks (outlineLevel > 1, i.e. non-summary/non-bucket tasks)
+            const leafTasks = (project.tasks || []).filter(t => !t.summary && t.outlineLevel !== 1);
 
             for (const task of leafTasks) {
                 try {
+                    const wasNew = !task._plannerId;
                     await pushTaskToPlanner(task, planId);
-                    if (task._plannerId) {
-                        summary.updated++;
-                    } else {
+                    if (wasNew) {
                         summary.created++;
+                    } else {
+                        summary.updated++;
                     }
                 } catch (err) {
                     summary.failed++;
+                    console.warn('[MSGraph] pushTaskToPlanner error:', err.message);
                 }
             }
 
@@ -756,41 +790,54 @@ import * as msal from '@azure/msal-browser';
     }
 
     function _mergeRemoteChanges(project, remoteTasks) {
-        const collectAllTasks = (tasks, all = []) => {
-            tasks.forEach(t => {
-                all.push(t);
-                if (t.children) {
-                    collectAllTasks(t.children, all);
-                }
-            });
-            return all;
-        };
-
-        const allLocalTasks = collectAllTasks(project.tasks);
+        // project.tasks is a flat list — no recursion needed
         const remoteMap = new Map(remoteTasks.map(t => [t.id, t]));
 
-        allLocalTasks.forEach(localTask => {
+        (project.tasks || []).forEach(localTask => {
+            // Skip bucket summary rows (their _plannerId is a bucket ID, not a task ID)
+            if (localTask.summary || localTask.outlineLevel === 1) return;
+
             const remote = remoteMap.get(localTask._plannerId);
             if (!remote) return;
 
-            // Update if remote is newer
-            const localMod = new Date(localTask._lastModified || 0);
+            // Update only if remote was modified more recently
+            const localMod  = new Date(localTask._lastModified || 0);
             const remoteMod = new Date(remote.lastModifiedDateTime || 0);
 
             if (remoteMod > localMod) {
-                localTask.percentComplete = remote.percentComplete || 0;
-                localTask._plannerEtag = remote['@odata.etag'];
-                localTask._lastModified = remote.lastModifiedDateTime;
+                localTask.percentComplete  = remote.percentComplete || 0;
+                localTask._plannerEtag     = remote['@odata.etag'];
+                localTask._lastModified    = remote.lastModifiedDateTime;
 
-                // Update assignments if present
-                if (remote.assignments && typeof remote.assignments === 'object') {
-                    localTask.resourceNames = [];
-                    Object.values(remote.assignments).forEach(assignment => {
-                        if (assignment.displayName) {
-                            localTask.resourceNames.push(assignment.displayName);
-                        }
-                    });
+                // Update start/finish if Planner has dates
+                if (remote.startDateTime) {
+                    localTask.start = remote.startDateTime.split('T')[0];
                 }
+                if (remote.dueDateTime) {
+                    localTask.finish = remote.dueDateTime.split('T')[0];
+                }
+
+                // Resolve user IDs → display names using the cache
+                if (remote.assignments && typeof remote.assignments === 'object') {
+                    const userIds = Object.keys(remote.assignments);
+                    localTask.resourceNames = userIds.map(
+                        id => _userCache.get(id) || id.substring(0, 8) + '…'
+                    );
+                }
+            }
+        });
+
+        // Recompute bucket summary % from their leaf tasks
+        const buckets = (project.tasks || []).filter(t => t.summary || t.outlineLevel === 1);
+        buckets.forEach(bucket => {
+            const leaves = (project.tasks || []).filter(
+                t => t._plannerBucketId === bucket._plannerBucketId
+                    && (t.outlineLevel !== 1 && !t.summary)
+            );
+            if (leaves.length > 0) {
+                bucket.percentComplete = Math.round(
+                    leaves.reduce((s, t) => s + (t.percentComplete || 0), 0) / leaves.length
+                );
             }
         });
     }
