@@ -208,51 +208,84 @@ import * as msal from '@azure/msal-browser';
     // PLANNER READ OPERATIONS
     // ============================================================================
 
+    /**
+     * Fetch ALL pages of a paginated Graph endpoint.
+     * Follows @odata.nextLink automatically.
+     */
+    async function _fetchAllPages(path) {
+        const items = [];
+        let nextPath = path;
+        while (nextPath) {
+            // nextLink is a full URL; strip the base endpoint prefix so _call can add it back
+            const relPath = nextPath.startsWith('http')
+                ? nextPath.replace(GRAPH_ENDPOINT, '')
+                : nextPath;
+            const result = await _call('GET', relPath);
+            (result.value || []).forEach(i => items.push(i));
+            nextPath = result['@odata.nextLink']
+                ? result['@odata.nextLink'].replace(GRAPH_ENDPOINT, '')
+                : null;
+        }
+        return items;
+    }
+
     async function getMyPlans() {
         try {
-            // Get all groups the user is a member of, then fetch their plans in parallel
-            const [myTasksData, groupsData] = await Promise.allSettled([
-                _call('GET', '/me/planner/tasks?$select=planId&$top=100'),
-                _call('GET', '/me/memberOf?$select=id,displayName&$top=100'),
+            // Fetch ALL tasks and ALL group memberships (follow pagination)
+            const [myTasks, allMemberships] = await Promise.allSettled([
+                _fetchAllPages('/me/planner/tasks?$select=planId&$top=100'),
+                _fetchAllPages('/me/memberOf?$select=id,displayName,@odata.type&$top=100'),
             ]);
 
             const planIdSet = new Set();
 
-            // Collect plan IDs from tasks
-            if (myTasksData.status === 'fulfilled') {
-                (myTasksData.value?.value || []).forEach(t => {
-                    if (t.planId) planIdSet.add(t.planId);
-                });
+            // Collect plan IDs from the user's own tasks
+            if (myTasks.status === 'fulfilled') {
+                myTasks.value.forEach(t => { if (t.planId) planIdSet.add(t.planId); });
             }
 
-            // Collect plans from groups (finds plans even if user has no tasks)
-            if (groupsData.status === 'fulfilled') {
-                const groups = (groupsData.value?.value || []).filter(g => g['@odata.type'] === '#microsoft.graph.group');
-                const groupPlansResults = await Promise.allSettled(
-                    groups.slice(0, 20).map(g => _call('GET', `/groups/${g.id}/planner/plans`))
+            // Collect plans from ALL groups (no 20-group limit)
+            if (allMemberships.status === 'fulfilled') {
+                const groups = allMemberships.value.filter(
+                    g => g['@odata.type'] === '#microsoft.graph.group'
+                        || g['odata.type']  === 'Microsoft.DirectoryServices.Group'
                 );
-                groupPlansResults.forEach(r => {
-                    if (r.status === 'fulfilled') {
-                        (r.value?.value || []).forEach(p => planIdSet.add(p.id));
-                    }
-                });
+                const BATCH = 10; // parallel group-plan fetches
+                for (let i = 0; i < groups.length; i += BATCH) {
+                    const batch = groups.slice(i, i + BATCH);
+                    const results = await Promise.allSettled(
+                        batch.map(g => _call('GET', `/groups/${g.id}/planner/plans`))
+                    );
+                    results.forEach(r => {
+                        if (r.status === 'fulfilled') {
+                            (r.value?.value || []).forEach(p => planIdSet.add(p.id));
+                        }
+                    });
+                }
             }
 
             if (planIdSet.size === 0) return [];
 
             // Fetch all plan details in parallel
-            const planResults = await Promise.allSettled(
-                [...planIdSet].map(id => _call('GET', `/planner/plans/${id}`))
-            );
-
-            const plans = planResults
-                .filter(r => r.status === 'fulfilled' && r.value?.id)
-                .map(r => ({
-                    id: r.value.id,
-                    title: r.value.title || '(Untitled)',
-                    owner: r.value.owner,
-                    createdBy: r.value.createdBy,
-                }));
+            const BATCH = 15;
+            const ids = [...planIdSet];
+            const plans = [];
+            for (let i = 0; i < ids.length; i += BATCH) {
+                const batch = ids.slice(i, i + BATCH);
+                const results = await Promise.allSettled(
+                    batch.map(id => _call('GET', `/planner/plans/${id}`))
+                );
+                results.forEach(r => {
+                    if (r.status === 'fulfilled' && r.value?.id) {
+                        plans.push({
+                            id:         r.value.id,
+                            title:      r.value.title || '(Untitled)',
+                            owner:      r.value.owner,
+                            createdBy:  r.value.createdBy,
+                        });
+                    }
+                });
+            }
 
             // Sort alphabetically
             plans.sort((a, b) => a.title.localeCompare(b.title));
@@ -285,29 +318,28 @@ import * as msal from '@azure/msal-browser';
 
     async function getPlanDetails(planId) {
         try {
-            const [planData, bucketsData, tasksData] = await Promise.all([
+            // Fetch plan metadata, ALL buckets, and ALL tasks (with pagination)
+            const [planData, allBuckets, allTasks] = await Promise.all([
                 _call('GET', `/planner/plans/${planId}`),
-                _call('GET', `/planner/plans/${planId}/buckets`),
-                _call('GET', `/planner/plans/${planId}/tasks`),
+                _fetchAllPages(`/planner/plans/${planId}/buckets`),
+                _fetchAllPages(`/planner/plans/${planId}/tasks`),
             ]);
 
-            const buckets = (bucketsData.value || []).map(b => ({
-                id: b.id,
-                name: b.name,
+            const buckets = allBuckets.map(b => ({
+                id:        b.id,
+                name:      b.name,
                 orderHint: b.orderHint,
             }));
 
-            const tasks = tasksData.value || [];
-
             return {
                 plan: {
-                    id: planData.id,
-                    title: planData.title,
-                    owner: planData.owner,
+                    id:        planData.id,
+                    title:     planData.title,
+                    owner:     planData.owner,
                     createdBy: planData.createdBy,
                 },
                 buckets,
-                tasks,
+                tasks: allTasks,
             };
         } catch (err) {
             throw new Error(`getPlanDetails failed: ${err.message}`);
@@ -323,20 +355,69 @@ import * as msal from '@azure/msal-browser';
     }
 
     // ============================================================================
+    // USER DISPLAY NAME CACHE
+    // ============================================================================
+
+    const _userCache = new Map(); // userId → displayName
+
+    /**
+     * Resolve an array of user IDs to display names via Graph API.
+     * Results are cached to avoid duplicate requests.
+     */
+    async function _resolveUserDisplayNames(userIds) {
+        const missing = userIds.filter(id => id && !_userCache.has(id));
+        if (missing.length > 0) {
+            const BATCH = 15;
+            for (let i = 0; i < missing.length; i += BATCH) {
+                const batch = missing.slice(i, i + BATCH);
+                const results = await Promise.allSettled(
+                    batch.map(id => _call('GET', `/users/${id}?$select=displayName,mail`))
+                );
+                results.forEach((r, idx) => {
+                    const id = batch[idx];
+                    if (r.status === 'fulfilled' && r.value?.displayName) {
+                        _userCache.set(id, r.value.displayName);
+                    } else {
+                        // Fallback: show first 8 chars of UUID
+                        _userCache.set(id, id.substring(0, 8) + '…');
+                    }
+                });
+            }
+        }
+        return userIds.map(id => _userCache.get(id) || id);
+    }
+
+    // ============================================================================
     // MAPPING: PLANNER → PROJECTFLOW
     // ============================================================================
 
-    function plannerToProject(plan, buckets, tasks, taskDetailsMap) {
+    /**
+     * Convert Planner plan data to a ProjectFlow project with a FLAT task list.
+     * Buckets become summary tasks (outlineLevel 1).
+     * Tasks inside each bucket become leaf tasks (outlineLevel 2).
+     *
+     * @param {Object} plan
+     * @param {Array}  buckets
+     * @param {Array}  tasks
+     * @param {Object} taskDetailsMap   taskId → details object
+     * @param {Object} userIdToName     userId  → displayName (pre-resolved)
+     */
+    function plannerToProject(plan, buckets, tasks, taskDetailsMap, userIdToName = {}) {
         const project = {
             id: plan.id,
             name: plan.title,
             owner: plan.owner,
             createdBy: plan.createdBy,
-            tasks: [],
+            tasks: [],          // FLAT list — app uses outlineLevel for hierarchy
+            resources: [],
+            assignments: [],
             _plannerId: plan.id,
         };
 
-        // Sort buckets by orderHint
+        const today = new Date().toISOString().split('T')[0];
+        let uidSeq = 1;
+
+        // Sort buckets by orderHint (ascending)
         const sortedBuckets = [...buckets].sort((a, b) => {
             if (!a.orderHint && !b.orderHint) return 0;
             if (!a.orderHint) return 1;
@@ -344,80 +425,120 @@ import * as msal from '@azure/msal-browser';
             return a.orderHint.localeCompare(b.orderHint);
         });
 
-        // Create summary task for each bucket
         sortedBuckets.forEach(bucket => {
-            const bucketTask = {
-                id: bucket.id,
-                name: bucket.name,
-                outlineLevel: 1,
-                resourceNames: [],
-                percentComplete: 0,
-                tags: [],
-                notes: '',
-                children: [],
-                _plannerId: bucket.id,
-                _plannerBucketId: bucket.id,
-            };
-
-            // Find all tasks in this bucket
             const bucketTasks = tasks.filter(t => t.bucketId === bucket.id);
-            bucketTasks.forEach(task => {
-                const details = taskDetailsMap[task.id] || {};
-                const today = new Date().toISOString().split('T')[0];
-                const startDate = task.startDateTime ? task.startDateTime.split('T')[0] : today;
-                const finishDate = task.dueDateTime
-                    ? task.dueDateTime.split('T')[0]
-                    : _addDays(startDate, 1);
 
-                // Parse assignments (object keyed by userId)
+            // Compute bucket date range from its children
+            let bucketStart = null;
+            let bucketFinish = null;
+
+            bucketTasks.forEach(task => {
+                const s = task.startDateTime ? task.startDateTime.split('T')[0] : today;
+                const f = task.dueDateTime   ? task.dueDateTime.split('T')[0]   : _addDays(s, 1);
+                if (!bucketStart  || s < bucketStart)  bucketStart  = s;
+                if (!bucketFinish || f > bucketFinish) bucketFinish = f;
+            });
+
+            if (!bucketStart)  bucketStart  = today;
+            if (!bucketFinish) bucketFinish = _addDays(bucketStart, bucketTasks.length || 1);
+
+            const bucketDur = Math.max(1, Math.ceil(
+                (new Date(bucketFinish) - new Date(bucketStart)) / 864e5
+            ));
+
+            // Compute bucket % complete from children
+            let bucketPct = 0;
+            if (bucketTasks.length > 0) {
+                bucketPct = Math.round(
+                    bucketTasks.reduce((s, t) => s + (t.percentComplete || 0), 0) / bucketTasks.length
+                );
+            }
+
+            const bucketUid = uidSeq++;
+
+            // ── Add bucket as summary task ──
+            project.tasks.push({
+                uid:            bucketUid,
+                id:             bucketUid,
+                name:           bucket.name,
+                outlineLevel:   1,
+                summary:        true,
+                milestone:      false,
+                start:          bucketStart,
+                finish:         bucketFinish,
+                durationDays:   bucketDur,
+                percentComplete: bucketPct,
+                resourceNames:  [],
+                predecessors:   [],
+                tags:           [],
+                notes:          '',
+                isExpanded:     true,
+                isVisible:      true,
+                _plannerId:     bucket.id,
+                _plannerBucketId: bucket.id,
+            });
+
+            // ── Add each task as a flat leaf (outlineLevel 2) ──
+            bucketTasks.forEach(task => {
+                const details   = taskDetailsMap[task.id] || {};
+                const startDate = task.startDateTime ? task.startDateTime.split('T')[0] : today;
+                const finishDate = task.dueDateTime  ? task.dueDateTime.split('T')[0]  : _addDays(startDate, 1);
+                const dur = Math.max(1, Math.ceil(
+                    (new Date(finishDate) - new Date(startDate)) / 864e5
+                ));
+
+                // Resolve assignment user IDs → display names
                 const resourceNames = [];
                 if (task.assignments && typeof task.assignments === 'object') {
-                    Object.values(task.assignments).forEach(assignment => {
-                        if (assignment.displayName) {
-                            resourceNames.push(assignment.displayName);
-                        } else {
-                            resourceNames.push(assignment.assignedBy?.user?.displayName || 'Unknown');
-                        }
+                    Object.keys(task.assignments).forEach(userId => {
+                        const name = userIdToName[userId] || _userCache.get(userId) || null;
+                        if (name) resourceNames.push(name);
                     });
                 }
 
-                // Map appliedCategories to tags
+                // Map appliedCategories → tags
                 const tags = [];
                 if (task.appliedCategories && typeof task.appliedCategories === 'object') {
                     Object.keys(task.appliedCategories).forEach(key => {
-                        if (task.appliedCategories[key] === true) {
-                            tags.push(key);
-                        }
+                        if (task.appliedCategories[key] === true) tags.push(key);
                     });
                 }
 
-                // Build notes with description + checklist
+                // Build notes = description + checklist
                 let notes = details.description || '';
                 if (details.checklist && Object.keys(details.checklist).length > 0) {
                     const checklistItems = Object.values(details.checklist)
                         .map(item => `- ${item.title}${item.isChecked ? ' ✓' : ''}`)
                         .join('\n');
-                    notes = notes ? `${notes}\n\nChecklist:\n${checklistItems}` : `Checklist:\n${checklistItems}`;
+                    notes = notes
+                        ? `${notes}\n\nChecklist:\n${checklistItems}`
+                        : `Checklist:\n${checklistItems}`;
                 }
 
-                const leafTask = {
-                    id: task.id,
-                    name: task.title,
-                    outlineLevel: 2,
-                    start: startDate,
-                    finish: finishDate,
+                const taskUid = uidSeq++;
+
+                project.tasks.push({
+                    uid:            taskUid,
+                    id:             taskUid,
+                    name:           task.title,
+                    outlineLevel:   2,
+                    summary:        false,
+                    milestone:      false,
+                    start:          startDate,
+                    finish:         finishDate,
+                    durationDays:   dur,
                     percentComplete: task.percentComplete || 0,
                     resourceNames,
                     tags,
                     notes,
-                    _plannerId: task.id,
-                    _plannerEtag: task['@odata.etag'],
-                };
-
-                bucketTask.children.push(leafTask);
+                    predecessors:   [],
+                    isExpanded:     true,
+                    isVisible:      true,
+                    _plannerId:     task.id,
+                    _plannerEtag:   task['@odata.etag'],
+                    _plannerBucketId: bucket.id,
+                });
             });
-
-            project.tasks.push(bucketTask);
         });
 
         return project;
@@ -500,7 +621,26 @@ import * as msal from '@azure/msal-browser';
                 });
             }
 
-            const project = plannerToProject(plan, buckets, tasks, taskDetailsMap);
+            // Collect all unique user IDs from task assignments
+            const allUserIds = new Set();
+            tasks.forEach(task => {
+                if (task.assignments && typeof task.assignments === 'object') {
+                    Object.keys(task.assignments).forEach(uid => allUserIds.add(uid));
+                }
+            });
+
+            // Resolve user IDs → display names (cached)
+            const userIdToName = {};
+            if (allUserIds.size > 0) {
+                const ids = [...allUserIds];
+                await _resolveUserDisplayNames(ids);
+                ids.forEach(id => {
+                    const name = _userCache.get(id);
+                    if (name) userIdToName[id] = name;
+                });
+            }
+
+            const project = plannerToProject(plan, buckets, tasks, taskDetailsMap, userIdToName);
             return project;
         } catch (err) {
             throw new Error(`importPlan failed: ${err.message}`);
