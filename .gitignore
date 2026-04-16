@@ -16,12 +16,36 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Cloudflare tunnel binary
-cloudflared
-cloudflared.tgz
+# Local database
+data/
 
-# Temp files
-temp_plan.txt
+# Office temp files
+~$*
+
+# Documents (local only)
+*.docx
+*.xlsx
+*.pptx
+
+# Temp & test files
+temp_*
+test_*
 
 # Archive
 _archive/
+
+# Binaries
+cloudflared
+cloudflared.tgz
+
+# Deploy staging
+_deploy/
+
+# Tauri (not used)
+tauri.conf.json
+
+# Scratch scripts
+scratch/
+
+# Teams zip (regenerated)
+teams-app/ProjectFlow.zip
