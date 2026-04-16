@@ -151,44 +151,58 @@
     // GRAPH API CALL WRAPPER
     // ============================================================================
 
-    async function _call(method, path, body = null, retryCount = 0) {
+    async function _call(method, path, body = null, retryCount = 0, extraHeaders = {}) {
         try {
             const token = await _getAccessToken();
             const url = `${GRAPH_ENDPOINT}${path}`;
             const headers = {
                 Authorization: `Bearer ${token}`,
                 'Content-Type': 'application/json',
+                ...extraHeaders,
             };
 
-            const options = { method, headers };
-            if (body) {
-                options.body = JSON.stringify(body);
-            }
+            const options = { method, headers, signal: AbortSignal.timeout(30000) };
+            if (body) options.body = JSON.stringify(body);
 
             const response = await fetch(url, options);
 
-            // Handle 429 Rate Limit
+            // Handle 429 Rate Limit — exponential backoff
             if (response.status === 429) {
-                if (retryCount >= 3) {
-                    throw new Error('Rate limit exceeded after 3 retries.');
+                const MAX_RETRIES = 5;
+                if (retryCount >= MAX_RETRIES) {
+                    throw new Error(`Rate limit exceeded after ${MAX_RETRIES} retries.`);
                 }
-                const retryAfter = parseInt(response.headers.get('Retry-After') || '2', 10);
-                await new Promise(r => setTimeout(r, retryAfter * 1000));
-                return _call(method, path, body, retryCount + 1);
+                const retryAfter = parseInt(response.headers.get('Retry-After') || '1', 10);
+                const delay = Math.max(retryAfter * 1000, Math.pow(2, retryCount) * 1000);
+                console.warn(`[MSGraph] Rate limited. Retry ${retryCount + 1}/${MAX_RETRIES} in ${delay}ms`);
+                await new Promise(r => setTimeout(r, delay));
+                return _call(method, path, body, retryCount + 1, extraHeaders);
             }
 
-            // Handle 409 Conflict (ETag mismatch)
-            if (response.status === 409) {
-                throw new Error('ETag conflict. Task was modified remotely. Refresh and retry.');
+            // Handle 409 Conflict (ETag mismatch) — refresh ETag and retry once
+            if (response.status === 409 && retryCount === 0) {
+                console.warn('[MSGraph] ETag conflict — will retry after refresh');
+                throw new Error('ETag conflict. Task was modified remotely. Please refresh and retry.');
+            }
+
+            // Handle 204 No Content (PATCH/DELETE responses)
+            if (response.status === 204) {
+                // Capture new ETag if present
+                const newEtag = response.headers.get('ETag');
+                return newEtag ? { '@odata.etag': newEtag } : {};
             }
 
             if (!response.ok) {
-                const errData = await response.text();
+                const errData = await response.text().catch(() => response.statusText);
                 throw new Error(`Graph API error ${response.status}: ${errData}`);
             }
 
-            return await response.json();
+            const result = await response.json();
+            return result;
         } catch (err) {
+            if (err.name === 'TimeoutError') {
+                throw new Error(`Graph API timeout (${method} ${path})`);
+            }
             throw new Error(`Graph API call failed (${method} ${path}): ${err.message}`);
         }
     }
@@ -481,17 +495,24 @@
             const body = projectTaskToPlanner(task, task._plannerBucketId);
 
             let result;
-            if (task._plannerId && task._plannerId !== planId) {
-                // Existing Planner task: PATCH
-                const headers = {
-                    'If-Match': task._plannerEtag || '*',
-                };
-                result = await _call('PATCH', `/planner/tasks/${task._plannerId}`, body);
+            if (task._plannerId) {
+                // Existing Planner task: PATCH — must send If-Match ETag header
+                const etagHeaders = { 'If-Match': task._plannerEtag || '*' };
+                result = await _call('PATCH', `/planner/tasks/${task._plannerId}`, body, 0, etagHeaders);
+                // Update local ETag from response so next PATCH doesn't get 409
+                if (result && result['@odata.etag']) {
+                    task._plannerEtag = result['@odata.etag'];
+                }
             } else {
                 // New task: POST
                 body.planId = planId;
                 body.bucketId = task._plannerBucketId;
                 result = await _call('POST', '/planner/tasks', body);
+                // Store new Planner ID and ETag for future pushes
+                if (result && result.id) {
+                    task._plannerId    = result.id;
+                    task._plannerEtag  = result['@odata.etag'];
+                }
             }
 
             return result;
@@ -686,7 +707,7 @@
             el.style.color = type === 'error' ? '#f87171' : type === 'success' ? '#4ade80' : '#60a5fa';
         }
 
-        // ── Main flow: try auto-init, then decide which step ──
+        // ── Main flow: auto-init always succeeds (Client ID is baked in) ──
         async function startWizard() {
             wizard.innerHTML = '';
 
@@ -696,71 +717,28 @@
             header.innerHTML = `
                 <div style="font-size:2rem;margin-bottom:8px;">📋</div>
                 <h3 style="margin:0 0 4px 0;font-size:1.1rem;">Connect to Microsoft Planner</h3>
-                <p style="margin:0;font-size:0.8rem;color:var(--text-muted,#888);">Sign in with your Microsoft account to import plans</p>
+                <p style="margin:0;font-size:0.8rem;color:var(--text-muted,#888);">Sign in with your Microsoft account to load your plans</p>
             `;
             wizard.appendChild(header);
 
-            // Try auto-init
+            // Auto-init with built-in Client ID — always succeeds
+            showStatus('⏳ Initializing...', 'info');
             const ready = await _autoInit();
 
             if (!ready) {
-                // No Client ID configured — show input for Client ID only
-                renderClientIdPrompt();
+                showStatus('❌ Failed to initialize. Please refresh the page.', 'error');
                 return;
             }
 
-            // Check if already authenticated
+            // Already authenticated — go straight to plan selection
             if (isAuthenticated()) {
-                // Skip sign-in, go straight to plan selection
                 showStatus('✅ Already signed in', 'success');
                 await renderPlanSelection();
             } else {
-                // Show sign-in button
+                // First time — show sign-in button only (no Client ID prompt)
+                wizard.querySelector('.wizard-status')?.remove();
                 renderSignIn();
             }
-        }
-
-        // ── Fallback: Client ID prompt (only if no default is set) ──
-        function renderClientIdPrompt() {
-            const note = document.createElement('div');
-            note.style.cssText = 'padding:12px;background:rgba(245,158,11,0.1);border-radius:8px;margin-bottom:16px;font-size:0.8rem;color:#fbbf24;line-height:1.5;';
-            note.innerHTML = `
-                <strong>⚠️ One-time setup required</strong><br>
-                Register an app at <a href="https://portal.azure.com" target="_blank" style="color:#60a5fa;">Azure Portal</a> → 
-                Azure AD → App registrations → New registration.<br>
-                Set platform to <strong>Single-page application</strong> with redirect URI: <code style="color:#f59e0b">${window.location.origin}</code>
-            `;
-            wizard.appendChild(note);
-
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.placeholder = 'Paste your Azure AD Client ID';
-            input.style.cssText = 'width:100%;padding:10px;border:1px solid rgba(255,255,255,0.15);border-radius:8px;background:var(--bg-input,#2a2a3e);color:var(--text-primary,#e2e8f0);font-size:13px;box-sizing:border-box;margin-bottom:12px;';
-
-            const btn = document.createElement('button');
-            btn.textContent = 'Continue';
-            btn.style.cssText = 'width:100%;padding:12px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:white;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s;';
-            btn.addEventListener('mouseenter', () => btn.style.transform = 'translateY(-1px)');
-            btn.addEventListener('mouseleave', () => btn.style.transform = '');
-
-            btn.addEventListener('click', async () => {
-                const clientId = input.value.trim();
-                if (!clientId) { showStatus('Please enter a Client ID', 'error'); return; }
-                try {
-                    btn.disabled = true;
-                    btn.textContent = 'Configuring...';
-                    await configure(clientId, DEFAULT_TENANT);
-                    // Restart wizard with config ready
-                    await startWizard();
-                } catch (err) {
-                    showStatus('Configuration failed: ' + err.message, 'error');
-                    btn.disabled = false;
-                    btn.textContent = 'Continue';
-                }
-            });
-
-            wizard.appendChild(input);
-            wizard.appendChild(btn);
         }
 
         // ── Step 1: Sign In ──

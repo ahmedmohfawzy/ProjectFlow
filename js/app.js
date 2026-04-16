@@ -106,10 +106,15 @@ import { TeamsBridge } from './teams-bridge.js';
     }
 
     async function detectServer() {
+        // Skip server detection on GitHub Pages — no local server available
+        if (window.location.hostname.includes('github.io')) {
+            _serverMode = false;
+            return false;
+        }
         try {
             const r = await fetch(_serverURL + '/api/ping', { signal: AbortSignal.timeout(1500) });
             if (r.ok) { _serverMode = true; return true; }
-        } catch(e) {}
+        } catch(e) { /* server not running — use IndexedDB */ }
         _serverMode = false;
         return false;
     }
@@ -5366,10 +5371,12 @@ import { TeamsBridge } from './teams-bridge.js';
     // ── E.1: PWA Registration ─────────────────────────────────
     function initPWA() {
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js', { scope: '/' })
+            // Use correct scope for GitHub Pages (/ProjectFlow/) vs localhost (/)
+            const swBase = window.location.pathname.replace(/\/[^/]*$/, '/');
+            const swUrl  = swBase + 'sw.js';
+            navigator.serviceWorker.register(swUrl, { scope: swBase })
                 .then(reg => {
                     console.log('[PWA] Service Worker registered:', reg.scope);
-                    // Check for update
                     reg.addEventListener('updatefound', () => {
                         const newWorker = reg.installing;
                         newWorker.addEventListener('statechange', () => {
@@ -5379,7 +5386,12 @@ import { TeamsBridge } from './teams-bridge.js';
                         });
                     });
                 })
-                .catch(err => console.warn('[PWA] SW registration failed:', err));
+                .catch(err => {
+                    // SW not available on GitHub Pages — silently ignore
+                    if (!window.location.hostname.includes('github.io')) {
+                        console.warn('[PWA] SW registration failed:', err);
+                    }
+                });
         }
         // Handle PWA install prompt
         let _deferredInstall = null;
