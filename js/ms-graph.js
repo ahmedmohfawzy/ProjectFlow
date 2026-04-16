@@ -71,12 +71,12 @@ import * as msal from '@azure/msal-browser';
         return `https://login.microsoftonline.com/organizations/adminconsent?client_id=${DEFAULT_CLIENT_ID}&redirect_uri=${encodeURIComponent(uri)}`;
     }
 
+    // Use redirect instead of popup — works in Teams iframe + all browsers
     function signIn() {
         try {
-            if (!msalApp) {
-                throw new Error('MSGraphClient not configured. Call configure() first.');
-            }
-            return msalApp.loginPopup({ scopes: SCOPES });
+            if (!msalApp) throw new Error('MSGraphClient not configured.');
+            // loginRedirect navigates the page — no return value
+            msalApp.loginRedirect({ scopes: SCOPES, prompt: 'select_account' });
         } catch (err) {
             throw new Error(`Sign-in failed: ${err.message}`);
         }
@@ -651,21 +651,26 @@ import * as msal from '@azure/msal-browser';
     }
 
     /**
-     * Try to sign in silently (no popup, no redirect).
-     * Returns true if a cached session was found.
+     * Try to sign in silently or catch a returning redirect result.
+     * Returns true if authenticated (silently or via redirect).
      */
     async function trySilentSignIn() {
         try {
             const ready = await _autoInit();
             if (!ready) return false;
 
-            // Handle redirect response first (in case we're returning from a redirect)
-            try { await msalApp.handleRedirectPromise(); } catch (_) { /* ignore */ }
+            // ── Case 1: Returning from loginRedirect ──
+            let redirectResult = null;
+            try { redirectResult = await msalApp.handleRedirectPromise(); } catch (_) {}
+            if (redirectResult && redirectResult.account) {
+                console.log('[MSGraph] Signed in via redirect ✓', redirectResult.account.username);
+                return true;
+            }
 
+            // ── Case 2: Cached session exists ──
             const accounts = msalApp.getAllAccounts();
             if (!accounts || accounts.length === 0) return false;
 
-            // Try to get a token silently to confirm the session is valid
             await msalApp.acquireTokenSilent({ scopes: SCOPES, account: accounts[0] });
             return true;
         } catch (e) {
@@ -738,76 +743,43 @@ import * as msal from '@azure/msal-browser';
             }
         }
 
-        // ── Step 1: Sign In ──
+        // ── Step 1: Sign In (redirect flow — works in Teams iframe) ──
         function renderSignIn() {
+            const msLogo = `<svg viewBox="0 0 21 21" fill="none" width="20" height="20" style="vertical-align:middle;margin-right:10px;flex-shrink:0">
+                <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+            </svg>`;
+
+            const note = document.createElement('p');
+            note.style.cssText = 'font-size:0.78rem;color:var(--text-muted,#888);text-align:center;margin:0 0 14px;line-height:1.5;';
+            note.textContent = 'You will be redirected to Microsoft login and brought back automatically.';
+            wizard.appendChild(note);
+
             const signInBtn = document.createElement('button');
             signInBtn.type = 'button';
-            signInBtn.innerHTML = `
-                <svg viewBox="0 0 21 21" fill="none" width="20" height="20" style="vertical-align:middle;margin-right:8px;">
-                    <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
-                    <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
-                    <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
-                    <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
-                </svg>
-                Sign in with Microsoft
-            `;
+            signInBtn.innerHTML = `${msLogo} Sign in with Microsoft`;
             signInBtn.style.cssText = `
-                width: 100%;
-                padding: 14px 20px;
-                background: linear-gradient(135deg, #0078d4, #106ebe);
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 15px;
-                font-weight: 600;
-                cursor: pointer;
-                transition: all 0.2s;
-                display: flex;
-                align-items: center;
-                justify-content: center;
+                width:100%; padding:14px 20px;
+                background:linear-gradient(135deg,#0078d4,#106ebe);
+                color:white; border:none; border-radius:8px;
+                font-size:15px; font-weight:600; cursor:pointer;
+                transition:all 0.2s; display:flex; align-items:center; justify-content:center;
             `;
             signInBtn.addEventListener('mouseenter', () => signInBtn.style.transform = 'translateY(-2px)');
             signInBtn.addEventListener('mouseleave', () => signInBtn.style.transform = '');
 
-            signInBtn.addEventListener('click', async () => {
+            signInBtn.addEventListener('click', () => {
+                // loginRedirect navigates away — no await needed
+                signInBtn.disabled = true;
+                signInBtn.innerHTML = '⏳ Redirecting to Microsoft…';
                 try {
-                    signInBtn.disabled = true;
-                    signInBtn.style.opacity = '0.7';
-                    signInBtn.innerHTML = '🔄 Signing in...';
-                    await signIn();
-                    const account = getAccount();
-                    if (account) {
-                        showStatus(`✅ Signed in as ${account.email}`, 'success');
-                        // Remove sign-in button and show plans
-                        signInBtn.remove();
-                        await renderPlanSelection();
-                    } else {
-                        showStatus('Sign-in cancelled or failed', 'error');
-                        signInBtn.disabled = false;
-                        signInBtn.style.opacity = '1';
-                        signInBtn.innerHTML = `
-                            <svg viewBox="0 0 21 21" fill="none" width="20" height="20" style="vertical-align:middle;margin-right:8px;">
-                                <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
-                                <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
-                                <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
-                                <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
-                            </svg>
-                            Sign in with Microsoft
-                        `;
-                    }
+                    signIn(); // triggers full-page redirect
                 } catch (err) {
                     showStatus('Sign-in failed: ' + err.message, 'error');
                     signInBtn.disabled = false;
-                    signInBtn.style.opacity = '1';
-                    signInBtn.innerHTML = `
-                        <svg viewBox="0 0 21 21" fill="none" width="20" height="20" style="vertical-align:middle;margin-right:8px;">
-                            <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
-                            <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
-                            <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
-                            <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
-                        </svg>
-                        Sign in with Microsoft
-                    `;
+                    signInBtn.innerHTML = `${msLogo} Sign in with Microsoft`;
                 }
             });
 
