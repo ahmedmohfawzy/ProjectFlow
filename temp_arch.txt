@@ -1,0 +1,534 @@
+تقرير المراجعة المعمارية
+‏ProjectFlow™ — Solution Architect Review
+إعداد: Ahmed M. Fawzy  |  التاريخ: 16 أبريل 2026  |  الإصدار: 2.0
+
+هذا التقرير يقدم مراجعة فنية شاملة لتطبيق ProjectFlow من منظور Solution Architect و Senior Software Engineer، ويُحدد المشكلات القائمة، الفجوات المعمارية، و الخطوات المطلوبة لتحويل التطبيق من نموذج أولي (Prototype) غني بالخصائص إلى منتج مؤسسي متكامل مع Microsoft Planner و Dynamics 365 Project Accounting، يستخدمه جميع موظفي الشركة.
+
+١. الملخص التنفيذي (Executive Summary)
+التطبيق في وضعه الحالي يمثّل نموذجاً أولياً قوياً وغنياً بالخصائص — يحتوي على أكثر من 17,400 سطر من JavaScript موزّعة على 24 module، يغطي Gantt و CPM و EVM و Dashboard و Reports (PDF/Excel) و Resource Management و Network Diagram و Kanban و Multi-Project Portfolio و PWA. غير أن هذه الخصائص بُنيت بسرعة كبيرة أدت إلى تراكم دَين تقني (Technical Debt) واضح:
+ملف app.js وحده يتجاوز 5,767 سطر، و reports.js يتجاوز 2,285 سطر — Monolith غير قابل للاختبار أو الصيانة على المدى الطويل.
+تم رصد أكثر من 90 مشكلة أمنية/خوارزمية/أداء في المراجعات السابقة، وبعضها حرج (XSS، Directory Traversal، Critical Path Bugs، TCPI Division by Zero).
+التكامل مع Microsoft Planner متقدم بنسبة ~70% (قراءة وكتابة مهام)، لكن لا يدعم Buckets creation و Attachments و Checklists push.
+التكامل مع D365 Project Accounting متقدم بنسبة ~40% (قراءة غالباً)، ويغيب عنه Timesheets, Expenses, Invoicing, WBS push-back, Project-level updates.
+البنية التحتية الحالية (Browser + IndexedDB + Node/SQLite المحلي) لا تصلح لنشر مؤسسي لجميع الموظفين — لا يوجد Multi-tenant، لا Central Auth، لا Real-time Collaboration، لا Audit Trail مركزي.
+التوصية الرئيسية: إعادة تشكيل المشروع على شكل منتج مؤسسي (Enterprise SaaS) يعمل داخل Microsoft 365 — كتطبيق Teams App مع Azure Backend — ومتبقٍ على واجهة المستخدم الحالية كـ Web UI أساسية. يركز العمل في المرحلة الحالية على تكامل ثنائي الاتجاه (Two-way Sync) مع MS Planner و D365 Project Accounting، مقسَّماً على 12 سبرنت أسبوعي.
+
+١.١ أرقام سريعة عن الوضع الحالي
+المؤشر
+القيمة
+التعليق
+إجمالي أسطر JS
+17,490
+موزعة على 24 ملف — معظمها في app.js و reports.js
+نسبة تكامل Planner
+~70%
+قراءة/كتابة مهام فقط — لا Buckets/Attachments/Checklists
+نسبة تكامل D365 PA
+~40%
+قراءة غالباً — لا Timesheets ولا Expenses ولا Invoices
+المشكلات الأمنية الحرجة
+7
+‏XSS, CORS, Directory Traversal, No CSRF, Unvalidated Uploads
+‏Bugs في Critical Path
+4 حرجة
+‏Cycle detection, FF/SF, Backward pass, Free Float
+عدد Modules المستقلة
+0
+كل الكود IIFE + globals — لا ES Modules
+اختبارات آلية
+0
+لا يوجد أي Unit / Integration / E2E Tests
+‏CI/CD
+لا يوجد
+لا Docker, لا Azure DevOps pipeline
+الجمهور الحالي
+مستخدم واحد
+‏Browser-local — لا Multi-tenant
+
+٢. المعمارية الحالية (Current Architecture)
+٢.١ نظرة عامة على الطبقات
+التطبيق مبني بمعمارية ثلاثية الطبقات (Client-heavy) مع احتياطات متعددة للتخزين:
+‏Presentation: HTML/CSS + HTML5 Canvas (Gantt, Network, EVM, Dashboard). ملف واحد index.html يحتوي جميع الـ views.
+‏Application: 24 JS module تعمل جميعها كـ IIFE على window.PF (Global). لا يوجد Build system و لا Module bundler.
+‏Data: ثلاثية التخزين: localStorage → IndexedDB (Dexie) → SQLite عبر Express/Node.js (server.js).
+‏Integrations: ms-graph.js (MSAL + Planner) + d365.js (Dataverse + F&O OData) — تعمل مباشرة من المتصفح.
+‏Offline: Service Worker (sw.js) + Web App Manifest (PWA).
+‏Optional wrappers: Tauri config (Desktop) + Plugins system.
+٢.٢ مخطط التدفق (Data Flow)
+‏ UI (app.js)  ⇅  EventBus / StateManager               ⇅ Storage Adapter  →  [ IndexedDB (Dexie) | localStorage | SQLite (server.js) ]               ⇅ MSAL Auth  →  [ Microsoft Graph (/planner/*) | D365 OData (/data/Projects) ] 
+• المتصفح يتولى بنفسه مصادقة MSAL، و استدعاء Graph/D365 APIs مباشرة دون backend proxy. هذا يُعد Anti-pattern لأي نشر مؤسسي لأن: (1) Tokens تعيش في المتصفح وتفتح سطح هجوم أكبر. (2) لا يوجد مكان مركزي لتطبيق سياسات (Rate limiting, Throttling, Auditing). (3) لا يمكن تطبيق Conditional Access أو IP restrictions على الـ backend.
+٢.٣ نقاط القوة (Strengths)
+تغطية وظيفية واسعة تنافس Microsoft Project في قائمة الخصائص الأساسية.
+استخدام MSAL مع PKCE بدل Client Secrets — قرار سليم لتطبيق Single-Page App.
+‏EventBus + StateManager خطوة جيدة نحو فصل المسؤوليات.
+‏Canvas rendering يتيح أداءً جيداً بدون Framework ثقيل.
+‏PWA مع Service Worker و دعم RTL و Dark Mode و Arabic.
+فكرة Multi-backend Storage Adapter قابلة للتطوير لاحقاً.
+
+٣. المشكلات المرصودة (Findings)
+٣.١ مشكلات معمارية (Architecture Issues)
+#
+الشدة
+الملف/الموقع
+المشكلة
+الحل المقترح
+‏A1
+حرجة
+‏app.js (5,767 سطر) + reports.js (2,285)
+‏Monolithic files — لا Modules, لا Tests, لا Lazy load
+تقسيم لـ ES Modules + Vite build + Lazy loading للـ views
+‏A2
+حرجة
+‏browser-first integrations
+‏MSAL + Graph + D365 مباشرة من المتصفح بدون Backend Proxy
+إضافة Azure Functions/App Service كـ BFF (Backend for Frontend)
+‏A3
+حرجة
+‏localStorage + IndexedDB + SQLite
+ثلاث طبقات تخزين بدون ضمانات Consistency — إمكانية فقد البيانات
+‏Single source of truth: Azure SQL/Cosmos، و IndexedDB فقط كـ Offline cache
+‏A4
+عالية
+‏server.js + server.py
+‏Backend مزدوج (Node+Flask) بنفس الوظيفة
+حذف Flask (تم أرشفته)، نقل MPP parsing إلى خدمة Azure Function مستقلة
+‏A5
+عالية
+لا يوجد CI/CD
+لا Docker, لا GitHub Actions, لا Quality gates
+إنشاء GitHub Actions pipeline: lint + test + build + deploy to Azure
+‏A6
+متوسطة
+لا يوجد Testing
+‏0 unit tests, 0 integration tests, 0 E2E
+إضافة Vitest لـ CPM/EVM/Adapters، Playwright للـ E2E على السيناريوهات الحرجة
+‏A7
+متوسطة
+‏Tauri config غير مُستخدم
+مشروع Desktop بدون توجه واضح
+تجميد Tauri حتى v2 — تركيز على Teams App + Web أولاً
+٣.٢ مشكلات أمنية (Security)
+#
+الشدة
+الموقع
+المشكلة
+الحل
+‏S1
+حرجة
+‏app.js innerHTML ×8 مواضع
+‏XSS — حقن بيانات المستخدم بدون Sanitization
+استبدال innerHTML بـ textContent + DOMPurify للحالات الضرورية + CSP Header
+‏S2
+حرجة
+‏server.js /api/browse
+‏Directory Traversal — يمكن تصفح أي مجلد بالـ path=..
+التحقق من أن المسار داخل config.dataDir + realpathSync + whitelist
+‏S3
+حرجة
+‏server.js CORS: *localhost:*
+‏CORS مفتوح لأي localhost port
+تقييد الـ CORS لـ origin محدد، و إضافة CSRF tokens
+‏S4
+عالية
+‏server.js — لا Rate limiting
+لا حماية من Brute-force أو DoS على الـ endpoints
+‏express-rate-limit أو Azure API Management
+‏S5
+عالية
+‏MPP upload (server.py — مؤرشف)
+لا تحقق من extension/MIME/magic bytes
+التحقق من الثلاثة + حد أقصى للحجم + AV scan عبر Azure
+‏S6
+عالية
+‏localStorage يحتوي tokens
+تخزين tokens في localStorage عرضة لـ XSS
+نقل tokens لـ sessionStorage + Backend handle refresh tokens
+‏S7
+متوسطة
+‏Missing security headers
+لا CSP, X-Frame-Options, HSTS
+إضافتها عبر helmet middleware + App Service config
+٣.٣ مشكلات خوارزمية (Algorithm Bugs)
+#
+الشدة
+الموقع
+المشكلة
+الحل
+‏B1
+حرجة
+‏critical-path.js L51-63
+‏Topological sort بدون Cycle Detection — Infinite loop محتمل
+إضافة visited/processing sets + Throw إذا عُثر على cycle
+‏B2
+حرجة
+‏critical-path.js L82-87
+حساب FF/SF dependencies خاطئ
+تصحيح الصيغة حسب PMBOK Guide
+‏B3
+حرجة
+‏critical-path.js L108-125
+‏Backward pass يفترض صحة Forward pass دون تحقق
+التحقق من قيم الخلف قبل الاستخدام + fallback صريح
+‏B4
+حرجة
+‏critical-path.js L143-158
+‏Free Float Formula خاطئة
+تصحيح الصيغة: FF = ES(succ) - EF(this)
+‏B5
+حرجة
+‏evm.js L80
+‏TCPI Division by Zero عند BAC = AC
+حماية صريحة + إرجاع Infinity/1 حسب الحالة
+‏B6
+عالية
+‏evm.js L62-66
+‏AC = EV في وضع non-cost — يُخفي الانحرافات
+استخدام Effort-based actuals أو إلغاء الوضع
+‏B7
+حرجة
+‏calendar.js L256-257
+‏Infinite loop في getWorkingDays() لو حسابات التاريخ غلط
+‏Maximum iteration guard + Date increment بـ timestamps
+‏B8
+عالية
+‏critical-path.js L22-26
+‏Non-Idempotent mutation — تُغيّر الـ tasks في مكانها
+‏Clone قبل الحساب أو clear computed props في البداية
+٣.٤ مشكلات أداء و ذاكرة (Performance)
+‏Event listener accumulation في render functions — memory leaks تدريجية (P1 - High).
+‏O(n²) lookups في app.js — filter().map().find() في 1000+ مهمة يعلّق الواجهة (P1 - High).
+‏getBoundingClientRect() على كل mousemove في gantt.js بدون throttle (P2 - Medium).
+‏Canvas re-renders بدون dirty-checking على hover (P2 - Medium).
+‏Inefficient DOM rebuilding في الـ Table view عند أي تغيير (P3 - Low).
+٣.٥ تكامل Microsoft Planner — الفجوات
+المكوّن
+الحالة
+ما ينقص
+‏OAuth2 + MSAL
+✅ موجود
+—
+‏Read plans / tasks / buckets
+✅ موجود
+—
+‏Push task updates (title, progress, dates)
+✅ موجود
+—
+‏Create new buckets
+❌ مفقود
+‏POST /planner/buckets مع plan validation
+‏Sync attachments
+❌ مفقود
+ربط بـ OneDrive/SharePoint، Graph driveItem API
+‏Sync checklists
+‏⚠️ Read only
+‏Push checklistItems عبر PATCH
+‏Real-time sync
+❌ يدوي/60s
+‏Webhooks (Graph subscriptions) + SignalR push للواجهة
+‏Conflict resolution
+❌ مفقود
+‏ETag + Last-write-wins + conflict modal للمستخدم
+‏Priority & Labels
+‏⚠️ Partial
+‏Complete mapping لـ priority (1-10) + category (1-25)
+٣.٦ تكامل D365 Project Accounting — الفجوات
+المكوّن
+الحالة
+ما ينقص
+‏Read Projects
+✅
+—
+‏Read Project tasks / WBS
+✅
+—
+‏Read Resources & Assignments
+✅
+—
+‏Read Budget lines & Transactions
+✅
+—
+‏Read KPIs (CPI/SPI/CV)
+✅
+—
+‏Push task progress/duration
+⚠️ محدود
+‏Validation + Error handling + Bulk update
+‏Push Project metadata
+❌
+‏Name, PM, status, category, funding source
+‏Timesheet integration
+❌
+‏TSTimesheetTrans + TSTimesheetLine entities + submission flow
+‏Expense integration
+❌
+‏TrvExpTrans + TrvRequisition + receipt upload
+‏Project invoicing
+❌
+‏ProjInvoiceProposal + ProjInvoiceJour
+‏WBS push-back
+❌
+‏ProjectWBS entity — استرجاع تعديلات WBS من التطبيق لـ D365
+‏Resource forecast
+❌
+‏ProjForecastEmpl/ProjForecastCost
+‏Custom fields mapping
+❌
+جميع الحقول hardcoded — محتاج Config UI
+
+٤. المعمارية المستهدفة (Target Architecture)
+٤.١ القرار المعماري — Teams App + Azure BFF
+بناءً على هدف استخدام التطبيق من قِبل جميع موظفي الشركة، و ضرورة التكامل الثنائي مع Planner و D365، أوصي بالمعمارية التالية:
+الطبقة
+التقنية المقترحة
+السبب
+‏Presentation Layer
+‏Web UI الحالية (refactored) + Microsoft Teams App manifest
+استخدام TeamsJS SDK لتوفير SSO و Deep links. لا يحتاج الموظف تسجيل دخول منفصل.
+‏Authentication
+‏Microsoft Entra ID (Azure AD) + MSAL.js v3 + Teams SSO
+أمان مؤسسي، Conditional Access، MFA موحد، لا Tokens في localStorage
+‏Backend-for-Frontend
+‏Azure Functions (Node.js 20 / TypeScript) أو Azure App Service
+‏Stateless، auto-scaling، يخفي secrets ويوحد سياسات
+‏Integration Layer
+‏Microsoft Graph SDK + D365 OData via @azure/msal-node + axios
+‏Official SDKs مع retry policies
+‏Data Layer
+‏Azure SQL Database (Hyperscale) + Cosmos DB for sync state + Azure Blob Storage للـ attachments
+‏ACID + Horizontal scale + Audit trail
+‏Realtime
+‏Azure SignalR Service + Graph Change Notifications (Webhooks)
+‏Push للتحديثات بدل polling
+‏Queue / Events
+‏Azure Service Bus + Event Grid
+‏Reliable sync jobs + retries
+‏Secrets
+‏Azure Key Vault + Managed Identity
+لا Secrets في الكود
+‏Observability
+‏Application Insights + Log Analytics
+‏Telemetry موحد
+‏CI/CD
+‏GitHub Actions → Azure Deploy
+‏Infrastructure as Code (Bicep)
+٤.٢ مخطط المعمارية المستهدفة
+‏ ┌─────────────────────────────────────────────────────────────┐ │              Microsoft Teams Client (Desktop/Web/Mobile)     │ │          ┌────────────────────────────────────────┐          │ │          │   ProjectFlow Teams Tab (React/Vanilla)│          │ │          │   + TeamsJS SDK  +  MSAL SSO           │          │ │          └──────────┬─────────────────────────────┘          │ └─────────────────────┼────────────────────────────────────────┘                       │ HTTPS + Bearer JWT                       ▼ ┌─────────────────────────────────────────────────────────────┐ │                  Azure Front Door (CDN + WAF)                │ └─────────────────────┬────────────────────────────────────────┘                       ▼ ┌─────────────────────────────────────────────────────────────┐ │         Azure App Service / Functions (BFF)                  │ │  ┌───────────┐ ┌───────────┐ ┌──────────┐ ┌──────────────┐ │ │  │ Auth API  │ │Planner API│ │ D365 API │ │ Projects API │ │ │  └───────────┘ └───────────┘ └──────────┘ └──────────────┘ │ │         │            │            │             │            │ │  On-Behalf-Of flow   ▼            ▼             ▼            │ │                  Graph API   D365 OData    Azure SQL         │ └────────────────────────────────────────────────────────────┘                       │                       ▼                    ▲ ┌───────────────────────────┐   ┌──────────┴──────────────┐ │  Azure Service Bus Queue  │   │ Azure SignalR (Realtime) │ │  (Sync jobs, retries)     │   └──────────────────────────┘ └─────────┬─────────────────┘           ▼ ┌──────────────────────────┐ │ Graph Webhook Receiver   │  ← Change Notifications (Planner) └──────────────────────────┘ 
+٤.٣ خطوات التكامل ثنائي الاتجاه
+‏Planner — Two-way Sync
+‏Subscribe على Graph change notifications للـ Planner tasks (POST /subscriptions).
+‏Event Grid يوجّه الـ webhook للـ Azure Function: on-planner-change.
+‏Function تجلب التغيير الكامل، تحدّث Azure SQL، ثم تبث إشعار SignalR للعملاء.
+في الاتجاه العكسي: UI → BFF → POST /planner/tasks/{id} + Update Azure SQL في نفس المعاملة.
+‏D365 Project Accounting — Two-way Sync
+للـ inbound: Timer-based Azure Function كل 5 دقائق → D365 OData $filter=modifiedDateTime gt LAST_SYNC.
+‏Upsert في Azure SQL مع حقل externalETag.
+للـ outbound: UI change → BFF → Validation → D365 OData PATCH + Azure SQL commit في transaction واحد.
+استخدام Batch API ($batch) لتقليل round-trips عند Sync Full.
+٤.٤ نموذج البيانات الموحد (Unified Data Model)
+نموذج مبسّط لجسر UI ↔ Planner ↔ D365:
+‏Entity
+الحقول الأساسية
+‏Planner
+‏D365 PA
+‏Project
+‏id, name, manager, startDate, endDate, status, budget, externalIds{plannerId, d365Id}
+‏Plan
+‏ProjTable
+‏Bucket/Phase
+‏id, projectId, name, order
+‏Bucket
+‏ProjectWBS (summary)
+‏Task
+‏id, projectId, bucketId, name, start, finish, duration, effort, percentComplete, assignedTo[], predecessors[]
+‏Task
+‏ProjectTask
+‏Resource
+‏id, name, email, role, dailyCapacity, costRate
+‏User
+‏HcmWorker + ResCategory
+‏Assignment
+‏taskId, resourceId, hours, costRate
+‏Assignment
+‏ProjEmplTrans
+‏Timesheet entry
+‏id, resourceId, taskId, date, hours, status
+—
+‏TSTimesheetTrans
+‏Expense
+‏id, projectId, resourceId, amount, date, category, receiptUrl
+—
+‏TrvExpTrans
+‏Invoice
+‏id, projectId, amount, status, dueDate
+—
+‏ProjInvoiceProposal
+
+٥. التوصيات التنفيذية (Actionable Recommendations)
+٥.١ أولويات مضغوطة (Top 10)
+#
+التوصية
+الوصف
+١
+إنشاء Azure Landing Zone
+موارد Azure + Entra App Registrations + Key Vault + Bicep templates.
+٢
+إصلاح مشكلات الأمان الحرجة
+‏XSS, CORS, Directory Traversal, CSRF — قبل أي نشر.
+٣
+إصلاح مشكلات Critical Path و EVM
+‏4 bugs حرجة تُعطي جداول خاطئة — خطر سمعة.
+٤
+تقسيم app.js إلى Modules
+‏Vite + ES Modules + Lazy loading للـ views.
+٥
+بناء Azure BFF
+‏Node.js + TypeScript + MSAL-node + Graph SDK.
+٦
+تصميم Unified Data Model في Azure SQL
+‏Schema + Migrations + Seed.
+٧
+بناء Planner Two-way Sync Service
+‏Webhook + Polling fallback + Conflict resolution.
+٨
+بناء D365 Two-way Sync Service
+‏Timer-based + Change tracking + OData $batch.
+٩
+تحويل التطبيق إلى Teams App
+‏Teams manifest + TeamsJS + SSO + Deep links.
+١٠
+‏Observability + CI/CD
+‏Application Insights + GitHub Actions + Bicep + Runbooks.
+٥.٢ الخصائص الجديدة المقترحة (New Features)
+‏Timesheet Web UI داخل التطبيق — يكتب في D365 TSTimesheetTrans (بديل للدخول على D365 مباشرة).
+‏Expense submission مع Receipt upload (OneDrive) → D365 TrvExpTrans.
+‏Project Invoice tracker — قراءة ProjInvoiceProposal و ProjInvoiceJour.
+‏Resource capacity heatmap على مستوى Portfolio مع دمج بيانات D365.
+‏Approval workflows (Power Automate triggers) للـ Timesheets/Expenses.
+‏Copilot integration — اسأل باللغة الطبيعية عن حالة مشروعك (Azure OpenAI on your data).
+‏Notifications via Teams Activity Feed بدل الـ in-app only.
+‏Portfolio analytics with Power BI Embedded tile داخل التطبيق.
+‏Mobile-first Teams Tab — قراءة سريعة + Approve Timesheet من الجوال.
+‏Audit Log كامل في Azure SQL — مين عدّل إيه ومتى (SOX compliance).
+‏Role-Based Access Control (RBAC) — PMO Admin / PM / Team Member / Viewer / Finance.
+‏Localization كاملة (AR/EN) + حقول حسابية تدعم التقويم الهجري.
+٥.٣ خصائص يُقترح حذفها أو تجميدها (De-scope)
+‏Tauri Desktop App — تجميد حتى v2. التركيز على Teams + Web أولاً.
+‏Plugins system (plugins.js — 701 سطر) — لا قيمة واضحة للجمهور المستهدف، حذف أو تأجيل.
+‏Webhooks الخاصة بالنسخة المحلية — تُستبدل بـ Graph Webhooks الرسمية.
+‏Bubble chart view — استخدام منخفض وممكن استبدالها بـ Power BI tile.
+‏Share link عبر URL طويل — يُستبدل بـ Teams deep link + Entra group membership.
+‏server.py (Flask) — تم أرشفته، سيُنقل لـ Azure Function مستقلة إن احتجنا MPP parsing.
+٥.٤ الملفات التي تم أرشفتها في هذه المراجعة
+‏Portfolio_Redesign_Prototype.html — prototype قديم
+‏app_prototype.html — prototype قديم
+‏ProjectFlow - Improvement Roadmap.docx — يحل محله هذا التقرير و ملف الخطة الجديد
+‏ProjectFlow_Code_Review_Report.docx — يحل محله هذا التقرير
+‏UIUX_Improvement_Plan.docx — ستُدمج أهم بنوده في السبرنتات
+خطة_المشروع.md — يحل محله ملف الخطة الجديد (Project_Plan_Sprints.docx)
+‏server.py — Flask backend مكرر مع server.js
+‏phase6a_ideas.md — أفكار مضمّنة فعلياً في الخطة الجديدة
+‏Start/Stop Server.command — تُستبدل بـ npm scripts و Docker
+‏static/, templates/, uploads/ — مجلدات Flask غير مستخدمة
+
+٦. المخاطر و الاعتمادات (Risks & Dependencies)
+#
+الخطر
+الاحتمالية
+الأثر
+التخفيف
+‏R1
+‏Graph API / D365 API Rate Limits
+عالية
+توقف مؤقت في sync
+‏Exponential backoff + Batch API + Caching
+‏R2
+‏Tenant يمنع Third-party apps
+متوسطة
+عدم تثبيت الـ Teams app
+التحضير لسيناريو نشر Internal app + App approval process
+‏R3
+‏D365 Custom fields تختلف بين البيئات
+عالية
+كسر Mapping
+‏Metadata-driven config + Admin UI للـ mappings
+‏R4
+‏Migration من IndexedDB للـ Azure SQL
+متوسطة
+فقد بيانات
+‏One-time export/import tool + Dry-run mode
+‏R5
+عبء MFA على المستخدمين
+متوسطة
+مقاومة التبنّي
+‏Teams SSO + Device Compliance (تسجيل دخول مرة واحدة)
+‏R6
+كلفة Azure غير متوقعة
+متوسطة
+تجاوز الميزانية
+‏Cost Management alerts + Reserved capacity + Cost per user dashboard
+‏R7
+توقف Tauri — احتمال عودة متطلبات Desktop
+منخفضة
+إعادة عمل
+‏Electron كـ Fallback لاحقاً، بما أن الـ UI أصبحت Web-only
+‏R8
+‏Bug حرج في Critical Path يؤثر على مشروع عميل
+عالية
+سمعي
+إصلاح B1-B8 في Sprint 1 + Unit tests قبل أي release
+
+٧. مؤشرات النجاح (Success KPIs)
+المؤشر
+الحالي
+الهدف (بعد 12 سبرنت)
+الأداة
+‏MTTR للأخطاء الحرجة
+غير مقاس
+< 4 ساعات
+‏App Insights + PagerDuty
+‏Code coverage (CPM/EVM)
+0%
+> 80%
+‏Vitest + Codecov
+‏Planner sync lag
+60 ثانية
+< 5 ثواني (push)
+‏SignalR telemetry
+‏D365 sync lag
+يدوي
+≤ 5 دقائق
+‏Azure Function logs
+‏p95 API latency
+غير مقاس
+‏< 500ms
+‏App Insights
+‏Uptime (SLO)
+—
+99.5%
+‏Azure Monitor
+‏Security scan issues
+~90
+‏0 Critical, < 5 High
+‏SonarCloud + Defender
+‏Active enterprise users
+1
+جميع الموظفين
+‏Application Insights
+‏SUS (User Satisfaction)
+غير مقاس
+> 75
+شهرياً in-app survey
+‏Bundle size (initial load)
+‏> 2MB
+‏< 500KB (gzipped)
+‏Lighthouse
+
+٨. الخاتمة و الخطوات التالية
+التطبيق كأساس وظيفي يمثل رصيداً قيماً، لكنه يحتاج تحولاً معمارياً واضحاً ليصبح منتجاً مؤسسياً صالحاً للاستخدام على مستوى الشركة. الخطة الجديدة المرفقة في المستند (Project_Plan_Sprints.docx) تُنظّم العمل على 12 سبرنت أسبوعي (~3 أشهر) تبدأ بإصلاح الأساس الأمني و الخوارزمي، ثم بناء Azure BFF، ثم تكامل Planner و D365 ثنائي الاتجاه، وتنتهي بـ Teams App production-ready.
+الخطوات التالية الفورية:
+الحصول على Azure subscription و Entra Admin access و D365 Sandbox مع صلاحيات API.
+تعيين فريق مُصغّر: Tech Lead + 2 Devs + DevOps + QA + PM (≈ 5 أشخاص).
+كِك-أوف Sprint 1 في غضون أسبوع — إصلاح الأمان الحرج و Critical Path bugs.
+إعداد Backlog في Azure DevOps/GitHub Projects من الملف المرفق Sprint_Backlog.xlsx.
+
+— نهاية التقرير —

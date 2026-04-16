@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Cloudflare tunnel binary
+cloudflared
+cloudflared.tgz
+
+# Temp files
+temp_plan.txt
+
+# Archive
+_archive/

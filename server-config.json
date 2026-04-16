@@ -1,0 +1,5 @@
+{
+  "dataDir": "/Users/ahmedfawzy/Documents/MS project/data",
+  "port": 3456,
+  "activeDatabase": "default.db"
+}

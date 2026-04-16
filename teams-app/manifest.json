@@ -1,0 +1,40 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "cb85d5a6-ed15-4a0e-8ead-40c6d45491a6",
+  "developer": {
+    "name": "Ahmed M. Fawzy",
+    "websiteUrl": "https://divine-webshots-consistently-disciplinary.trycloudflare.com",
+    "privacyUrl": "https://divine-webshots-consistently-disciplinary.trycloudflare.com",
+    "termsOfUseUrl": "https://divine-webshots-consistently-disciplinary.trycloudflare.com"
+  },
+  "name": {
+    "short": "ProjectFlow",
+    "full": "ProjectFlow™ — Professional Project Management"
+  },
+  "description": {
+    "short": "Professional project management with Gantt, CPM, EVM & Portfolio reporting",
+    "full": "ProjectFlow™ is a comprehensive, browser-based project management system featuring Gantt charts, Critical Path Method (CPM), Earned Value Management (EVM), resource leveling, portfolio dashboards, and Microsoft Planner integration. Built for teams that need enterprise-grade project controls."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#6366f1",
+  "staticTabs": [
+    {
+      "entityId": "projectflow-home",
+      "name": "ProjectFlow",
+      "contentUrl": "https://divine-webshots-consistently-disciplinary.trycloudflare.com/index.html",
+      "websiteUrl": "https://divine-webshots-consistently-disciplinary.trycloudflare.com/index.html",
+      "scopes": ["personal"]
+    }
+  ],
+  "permissions": ["identity"],
+  "validDomains": [
+    "divine-webshots-consistently-disciplinary.trycloudflare.com"
+  ],
+  "showLoadingIndicator": false,
+  "isFullScreen": false
+}

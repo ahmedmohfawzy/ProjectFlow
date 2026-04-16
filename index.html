@@ -1,0 +1,1544 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ProjectFlow™ — Professional Project Management</title>
+    <meta name="description" content="ProjectFlow™ — A professional, browser-based project management system with Gantt charts, CPM, EVM, resource management, and portfolio reporting. Built by Ahmed M. Fawzy.">
+    <meta name="author" content="Ahmed M. Fawzy">
+    <meta name="copyright" content="© 2026 Ahmed M. Fawzy. All Rights Reserved.">
+    <meta name="application-name" content="ProjectFlow™">
+    <meta name="keywords" content="project management, gantt chart, CPM, EVM, resource leveling, portfolio, scheduling, browser-based">
+    <meta name="robots" content="noindex, nofollow">
+    <!-- Open Graph -->
+    <meta property="og:title" content="ProjectFlow™ — Professional Project Management">
+    <meta property="og:description" content="A comprehensive project management system with Gantt charts, critical path, earned value management, and portfolio reporting.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://www.linkedin.com/in/ahmed-m-fawzy">
+    <!-- Branding -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32">
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+    <script>
+    // Force-unregister old Service Workers and clear stale caches on every load.
+    // This guarantees the browser always runs the latest HTML + JS.
+    if ('serviceWorker' in navigator) {
+        // Unregister any SW not matching the current sw.js
+        navigator.serviceWorker.getRegistrations().then(regs => {
+            regs.forEach(r => {
+                // Only keep the current sw.js; unregister any legacy ones
+                if (r.active && !r.active.scriptURL.includes('sw.js')) r.unregister();
+            });
+        });
+        // Clear ALL old caches except the current version
+        caches.keys().then(keys => keys.forEach(k => {
+            if (k !== 'projectflow-v4') caches.delete(k);
+        }));
+    }
+    </script>
+    <!-- legacy scripts moved to main.js modules -->
+    <!-- E.1: PWA -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#6366f1">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="ProjectFlow">
+</head>
+<body>
+    <!-- ═══════════════ TOP NAV BAR ═══════════════ -->
+    <header id="app-header">
+        <div class="header-left">
+            <button class="btn btn-ghost sidebar-toggle" id="btnSidebarToggle" title="Toggle Projects Sidebar (⌘B)">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+            </button>
+            <div class="logo">
+                <svg class="logo-icon" viewBox="0 0 32 32" fill="none">
+                    <rect x="2" y="6" width="28" height="20" rx="3" stroke="currentColor" stroke-width="2"/>
+                    <line x1="2" y1="12" x2="30" y2="12" stroke="currentColor" stroke-width="2"/>
+                    <line x1="10" y1="6" x2="10" y2="26" stroke="currentColor" stroke-width="1.5"/>
+                    <rect x="12" y="15" width="8" height="3" rx="1" fill="currentColor" opacity="0.8"/>
+                    <rect x="14" y="20" width="12" height="3" rx="1" fill="currentColor" opacity="0.5"/>
+                </svg>
+                <span class="logo-text">ProjectFlow</span>
+            </div>
+            <span class="project-name-display" id="projectNameDisplay">No project loaded</span>
+        </div>
+        <div class="header-center">
+            <div class="view-tabs" id="viewTabs">
+                <button class="tab-btn" data-view="dashboard" id="tabDashboard">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M2 10a8 8 0 018-8v8h8a8 8 0 11-16 0z"/><path d="M12 2.252A8.014 8.014 0 0117.748 8H12V2.252z"/></svg>
+                    Dashboard
+                </button>
+                <button class="tab-btn active" data-view="table" id="tabTable">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M0 3a2 2 0 012-2h16a2 2 0 012 2v14a2 2 0 01-2 2H2a2 2 0 01-2-2V3zm6 2H2v4h4V5zm0 6H2v4h4v-4zm2 4h4v-4H8v4zm6 0h4v-4h-4v4zm4-6v-4h-4v4h4zm-6 0h4V5h-4v4zM8 5v4h4V5H8z"/></svg>
+                    Table
+                </button>
+                <button class="tab-btn" data-view="gantt" id="tabGantt">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M2 4h6v3H2zM4 9h8v3H4zM6 14h10v3H6z"/></svg>
+                    Gantt
+                </button>
+                <button class="tab-btn" data-view="split" id="tabSplit">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M1 3h8v14H1zM11 3h8v14h-8z" fill-opacity="0.6"/><path d="M1 3h8v14H1z"/></svg>
+                    Split
+                </button>
+                <button class="tab-btn" data-view="resources" id="tabResources">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/></svg>
+                    Resources
+                </button>
+                <button class="tab-btn" data-view="calendar" id="tabCalendar">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path fill-rule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clip-rule="evenodd"/></svg>
+                    Calendar
+                </button>
+                <button class="tab-btn" data-view="network" id="tabNetwork">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M3 4a1 1 0 011-1h3a1 1 0 011 1v3a1 1 0 01-1 1H4a1 1 0 01-1-1V4zm9 0a1 1 0 011-1h3a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1V4zM6 12a1 1 0 011-1h3a1 1 0 011 1v3a1 1 0 01-1 1H7a1 1 0 01-1-1v-3z"/><path d="M7 7v2h2M14 7v4H10" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+                    Network
+                </button>
+                <!-- D.1: Board/Kanban view -->
+                <button class="tab-btn" data-view="board" id="tabBoard">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M2 3h4v14H2V3zm6 0h4v14H8V3zm6 0h4v14h-4V3z" fill-opacity="0.7"/></svg>
+                    Board
+                </button>
+                <button class="tab-btn" data-view="portfolio" id="tabPortfolio">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M2 4a1 1 0 011-1h5a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1V4zm9 0a1 1 0 011-1h5a1 1 0 011 1v5a1 1 0 01-1 1h-5a1 1 0 01-1-1V4zM2 13a1 1 0 011-1h5a1 1 0 011 1v4a1 1 0 01-1 1H3a1 1 0 01-1-1v-4zm9 0a1 1 0 011-1h5a1 1 0 011 1v4a1 1 0 01-1 1h-5a1 1 0 01-1-1v-4z"/></svg>
+                    Portfolio
+                </button>
+                <!-- ═ OVERFLOW "More" button — shown by NavOverflow JS when tabs don't fit ═ -->
+                <div class="nav-more-wrap" id="navMoreWrap" style="display:none">
+                    <button class="tab-btn nav-more-btn" id="navMoreBtn">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zm6 0a2 2 0 11-4 0 2 2 0 014 0zm6 0a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                        More <span class="nav-more-caret">▾</span>
+                    </button>
+                    <div class="nav-more-menu" id="navMoreMenu"></div>
+                </div>
+            </div>
+        </div>
+        <div class="header-right">
+
+            <!-- ── Undo / Redo ─────────────────────────────── -->
+            <button class="btn btn-ghost hdr-icon-btn" id="btnUndo" title="Undo (⌘Z)" disabled>
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M7.707 3.293a1 1 0 010 1.414L5.414 7H11a7 7 0 110 14H8a1 1 0 110-2h3a5 5 0 100-10H5.414l2.293 2.293a1 1 0 11-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z"/></svg>
+            </button>
+            <button class="btn btn-ghost hdr-icon-btn" id="btnRedo" title="Redo (⌘⇧Z)" disabled>
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M12.293 3.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L14.586 9H9a5 5 0 100 10h3a1 1 0 110 2H9a7 7 0 110-14h5.586l-2.293-2.293a1 1 0 010-1.414z"/></svg>
+            </button>
+
+            <div class="divider-v"></div>
+
+            <!-- ── Notifications ───────────────────────────── -->
+            <button class="btn btn-ghost hdr-icon-btn" id="btnNotifications" title="Notifications" style="position:relative">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M10 2a6 6 0 00-6 6v3.586l-.707.707A1 1 0 004 14h12a1 1 0 00.707-1.707L16 11.586V8a6 6 0 00-6-6zM10 18a3 3 0 01-3-3h6a3 3 0 01-3 3z"/></svg>
+                <span class="notif-badge hidden" id="notifBadge">0</span>
+            </button>
+
+            <!-- ── Theme toggle ─────────────────────────────── -->
+            <button class="btn btn-ghost hdr-icon-btn" id="btnThemeToggle" title="Toggle Light/Dark">
+                <span id="themeIcon">🌙</span>
+            </button>
+
+            <div class="divider-v"></div>
+
+            <!-- ── Scenarios dropdown ───────────────────────── -->
+            <div class="hdr-dropdown" id="hdrScenariosDrop">
+                <button class="btn btn-ghost hdr-icon-btn hdr-drop-trigger" id="hdrScenariosBtn" title="Scenarios">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z"/></svg>
+                    <span class="hdr-drop-label">Scenarios</span>
+                    <svg viewBox="0 0 12 12" fill="currentColor" width="9" height="9" class="hdr-caret"><path d="M6 8L1 3h10z"/></svg>
+                </button>
+                <div class="hdr-drop-menu hdr-drop-right">
+                    <div class="hdr-drop-header">What-If Scenarios</div>
+                    <button class="hdr-drop-item" id="btnSaveScenario">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm3 2h6v4H7V5zm-2 8v-2h10v2H5z"/></svg>
+                        Save snapshot
+                        <span class="hdr-drop-kbd">📸</span>
+                    </button>
+                    <button class="hdr-drop-item" id="btnManageScenarios">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-.293.707L12 11.414V15a1 1 0 01-.553.894l-4 2A1 1 0 016 17v-5.586L3.293 6.707A1 1 0 013 6V4z"/></svg>
+                        Manage scenarios
+                        <span class="hdr-drop-kbd">🎭</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- ── Settings dropdown ────────────────────────── -->
+            <div class="hdr-dropdown" id="hdrSettingsDrop">
+                <button class="btn btn-ghost hdr-icon-btn hdr-drop-trigger" id="hdrSettingsBtn" title="Settings & more">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd"/></svg>
+                </button>
+                <div class="hdr-drop-menu hdr-drop-right">
+                    <!-- Preferences section -->
+                    <div class="hdr-drop-header">Preferences</div>
+                    <button class="hdr-drop-item" id="btnSettings">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd"/></svg>
+                        Settings
+                    </button>
+                    <button class="hdr-drop-item" id="btnRTLToggle">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z"/></svg>
+                        Toggle RTL / LTR
+                        <span class="hdr-drop-kbd">🌐</span>
+                    </button>
+                    <button class="hdr-drop-item" id="btnShortcuts">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h6a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"/></svg>
+                        Keyboard shortcuts
+                        <span class="hdr-drop-kbd">⌨️</span>
+                    </button>
+                    <div class="hdr-drop-divider"></div>
+                    <!-- Collaboration section -->
+                    <div class="hdr-drop-header">Collaboration</div>
+                    <button class="hdr-drop-item" id="btnProjectRoles">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/></svg>
+                        Members & Roles
+                        <span class="hdr-drop-kbd">👥</span>
+                    </button>
+                    <button class="hdr-drop-item" id="btnWebhooks">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M10 2a6 6 0 00-6 6v3.586l-.707.707A1 1 0 004 14h12a1 1 0 00.707-1.707L16 11.586V8a6 6 0 00-6-6zM10 18a3 3 0 01-3-3h6a3 3 0 01-3 3z"/></svg>
+                        Webhooks & Integrations
+                        <span class="hdr-drop-kbd">🔔</span>
+                    </button>
+                    <div class="hdr-drop-divider"></div>
+                    <!-- System section -->
+                    <div class="hdr-drop-header">System</div>
+                    <button class="hdr-drop-item" id="btnPluginManager">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M11 17a1 1 0 001.447.894l4-2A1 1 0 0017 15V9.236a1 1 0 00-1.447-.894l-4 2a1 1 0 00-.553.894V17zM15.211 6.276a1 1 0 000-1.788l-4.764-2.382a1 1 0 00-.894 0L4.789 4.488a1 1 0 000 1.788l4.764 2.382a1 1 0 00.894 0l4.764-2.382zM4.447 8.342A1 1 0 003 9.236V15a1 1 0 00.553.894l4 2A1 1 0 009 17v-5.764a1 1 0 00-.553-.894l-4-2z"/></svg>
+                        Plugin Manager
+                        <span class="hdr-drop-kbd">🔌</span>
+                    </button>
+                    <button class="hdr-drop-item hidden" id="btnInstallPWA">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm1 11H9v-2h2v2zm0-4H9V6h2v3z"/></svg>
+                        Install as App (PWA)
+                        <span class="hdr-drop-kbd">📲</span>
+                    </button>
+                    <div class="hdr-drop-divider"></div>
+                    <button class="hdr-drop-item" id="btnAbout">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+                        About ProjectFlow™
+                    </button>
+                </div>
+            </div>
+
+        </div>
+    </header>
+    <!-- E.2: Mobile bottom nav -->
+    <nav id="mobileNav" class="mobile-nav">
+        <button class="mob-nav-btn" data-view="split">📊 Gantt</button>
+        <button class="mob-nav-btn" data-view="board">📋 Board</button>
+        <button class="mob-nav-btn" data-view="dashboard">📈 Dash</button>
+        <button class="mob-nav-btn" data-view="resources">👥 Res</button>
+        <button class="mob-nav-btn" data-view="portfolio">🗂 Hub</button>
+    </nav>
+
+    <!-- hidden file inputs (no visual element needed) -->
+    <input type="file" id="csvImportInput" accept=".csv" class="hidden">
+
+    <!-- ═══════════════ TOOLBAR (redesigned — clean & compact) ═══════════════ -->
+    <div id="toolbar">
+
+        <!-- GROUP 1: Import dropdown -->
+        <div class="toolbar-group">
+            <div class="tb-dropdown" id="tbImportDrop">
+                <button class="btn btn-primary tb-drop-trigger" id="btnImportTrigger">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z"/></svg>
+                    Import <span class="tb-caret">▾</span>
+                </button>
+                <div class="tb-drop-menu">
+                    <button class="tb-drop-item" id="btnImport">📄 XML (.mpp/.xml)</button>
+                    <button class="tb-drop-item" id="btnImportPlanner">📊 MS Planner (Excel)</button>
+                    <button class="tb-drop-item" id="btnImportCSV">📋 CSV / JIRA</button>
+                    <div class="tb-drop-divider"></div>
+                    <button class="tb-drop-item" id="btnPlannerSync" style="color:#60a5fa">🔄 Planner Live Sync</button>
+                    <button class="tb-drop-item" id="btnD365Sync"    style="color:#c084fc">🏢 Dynamics 365</button>
+                </div>
+            </div>
+
+            <!-- Export dropdown -->
+            <div class="tb-dropdown" id="tbExportDrop">
+                <button class="btn btn-secondary tb-drop-trigger" id="btnExportTrigger" disabled>
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z"/></svg>
+                    Export <span class="tb-caret">▾</span>
+                </button>
+                <div class="tb-drop-menu">
+                    <button class="tb-drop-item" id="btnExport"      disabled>📄 Export XML</button>
+                    <button class="tb-drop-item" id="btnExportExcel" disabled>📊 Export CSV</button>
+                    <button class="tb-drop-item" id="btnReports"     disabled>📋 Reports & PDF</button>
+                    <div class="tb-drop-divider"></div>
+                    <button class="tb-drop-item" id="btnShareLink">🔗 Share Link</button>
+                </div>
+            </div>
+
+            <button class="btn btn-ghost" id="btnNewProject" title="New Project (⌘N)">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path fill-rule="evenodd" d="M6 2a2 2 0 00-2 2v12a2 2 0 002 2h8a2 2 0 002-2V7.414A2 2 0 0015.414 6L12 2.586A2 2 0 0010.586 2H6zm5 6a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V8z" clip-rule="evenodd"/></svg>
+                New
+            </button>
+        </div>
+
+        <!-- GROUP 2: Project tools (icon-only to save space) -->
+        <div class="toolbar-group">
+            <button class="btn btn-ghost icon-btn" id="btnSetBaseline"   disabled title="Save Baseline">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M4 4v12h12V4H4zm-2 0a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V4z"/><path d="M4 16h12v-2H4v2z" opacity="0.5"/></svg>
+                <span class="icon-btn-label">Baseline</span>
+            </button>
+            <button class="btn btn-ghost icon-btn" id="btnAutoLevel"     disabled title="Auto-Level Resources">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm2 4a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1zm3 4a1 1 0 011-1h4a1 1 0 110 2H9a1 1 0 01-1-1z"/></svg>
+                <span class="icon-btn-label">Level</span>
+            </button>
+            <button class="btn btn-ghost icon-btn" id="btnCalendarSettings" title="Work Calendar">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path fill-rule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clip-rule="evenodd"/></svg>
+                <span class="icon-btn-label">Calendar</span>
+            </button>
+        </div>
+        <div class="toolbar-group">
+            <!-- SEARCH BAR -->
+            <div class="search-box" id="searchBox">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>
+                <input type="text" id="searchInput" placeholder="Search tasks…" class="search-input">
+                <button class="search-clear hidden" id="searchClear">&times;</button>
+            </div>
+            <!-- FILTER -->
+            <select id="filterSelect" class="filter-select">
+                <option value="all">All Tasks</option>
+                <option value="critical">🔴 Critical</option>
+                <option value="late">⏰ Late</option>
+                <option value="at-risk">⚠️ At Risk</option>
+                <option value="complete">✅ Complete</option>
+                <option value="milestone">⭐ Milestones</option>
+                <option value="summary">📁 Summary</option>
+            </select>
+            <!-- C.2: Advanced Filter -->
+            <button class="btn btn-ghost icon-btn" id="btnAdvFilter" title="Advanced Filters">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M3 3a1 1 0 011-1h12a1 1 0 011 1v3a1 1 0 01-.293.707L13 10.414V17a1 1 0 01-.553.894l-4-2A1 1 0 018 15v-4.586L3.293 6.707A1 1 0 013 6V3z" clip-rule="evenodd"/></svg>
+                <span class="icon-btn-label">Filters</span>
+                <span id="advFilterBadge" class="filter-badge hidden">0</span>
+            </button>
+        </div>
+
+        <!-- GROUP 4: Task actions (right-aligned, icon-only) -->
+        <div class="toolbar-group toolbar-right">
+            <button class="btn btn-ghost icon-btn" id="btnAddTask" disabled title="Add Task">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg>
+                <span class="icon-btn-label">Task</span>
+            </button>
+            <button class="btn btn-ghost icon-btn" id="btnAddMilestone" disabled title="Add Milestone">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M10 2l2.5 4.5L17 8l-3.5 3.5L14.5 16 10 13.5 5.5 16l1-4.5L3 8l4.5-1.5z"/></svg>
+                <span class="icon-btn-label">Mile.</span>
+            </button>
+            <button class="btn btn-ghost icon-btn btn-danger" id="btnDeleteTask" disabled title="Delete Selected (Del)">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+                <span class="icon-btn-label">Delete</span>
+            </button>
+            <div class="divider-v"></div>
+            <button class="btn btn-ghost" id="btnIndent"  disabled title="Indent (→)">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M3 4h14v2H3zM7 8h10v2H7zM7 12h10v2H7zM3 16h14v2H3zM3 8l3 2-3 2z"/></svg>
+            </button>
+            <button class="btn btn-ghost" id="btnOutdent" disabled title="Outdent (←)">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path d="M3 4h14v2H3zM7 8h10v2H7zM7 12h10v2H7zM3 16h14v2H3zM6 8l-3 2 3 2z"/></svg>
+            </button>
+            <div class="divider-v"></div>
+            <button class="btn btn-ghost icon-btn" id="btnCustomFields" disabled title="Custom Fields">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15"><path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"/></svg>
+                <span class="icon-btn-label">Fields</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ═══════════════ MAIN CONTENT ═══════════════ -->
+    <!-- ═══════════════ PROJECT SIDEBAR ═══════════════ -->
+    <aside id="projectSidebar" class="project-sidebar">
+        <div class="sidebar-header">
+            <h3>📂 Projects</h3>
+            <button class="btn btn-ghost btn-xs" id="btnSidebarClose">✕</button>
+        </div>
+        <div class="sidebar-search">
+            <input type="text" id="sidebarSearch" class="form-input" placeholder="Search projects...">
+        </div>
+        <div class="sidebar-list" id="sidebarProjectList"></div>
+        <div class="sidebar-actions">
+            <button class="btn btn-primary btn-sm sidebar-btn" id="btnSidebarNew">+ New Project</button>
+            <button class="btn btn-planner btn-sm sidebar-btn" id="btnSidebarImportPlanner">📥 MS Planner</button>
+            <button class="btn btn-secondary btn-sm sidebar-btn" id="btnSidebarImportXML">📄 Import XML</button>
+            <button class="btn btn-ghost btn-sm sidebar-btn" id="btnSidebarPortfolio">📊 Portfolio View</button>
+        </div>
+    </aside>
+
+    <main id="mainContent">
+        <!-- PROJECT HUB (replaces Welcome Screen) -->
+        <div id="welcomeScreen" class="welcome-screen">
+            <div class="hub-container">
+                <div class="hub-header">
+                    <div class="hub-title">
+                        <svg class="hub-logo" viewBox="0 0 80 80" fill="none">
+                            <rect x="8" y="16" width="64" height="48" rx="6" stroke="url(#grad1)" stroke-width="3"/>
+                            <line x1="8" y1="28" x2="72" y2="28" stroke="url(#grad1)" stroke-width="2"/>
+                            <line x1="24" y1="16" x2="24" y2="64" stroke="url(#grad1)" stroke-width="1.5" opacity="0.5"/>
+                            <rect x="28" y="33" width="18" height="5" rx="2" fill="url(#grad1)" opacity="0.9"/>
+                            <rect x="32" y="42" width="28" height="5" rx="2" fill="url(#grad1)" opacity="0.6"/>
+                            <rect x="28" y="51" width="14" height="5" rx="2" fill="url(#grad1)" opacity="0.4"/>
+                            <defs><linearGradient id="grad1" x1="0" y1="0" x2="80" y2="80"><stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#8b5cf6"/></linearGradient></defs>
+                        </svg>
+                        <div>
+                            <h1>ProjectFlow Hub</h1>
+                            <p class="hub-subtitle">Manage all your projects in one place</p>
+                        </div>
+                    </div>
+                    <div class="hub-actions">
+                        <button class="btn btn-planner btn-lg" id="btnHubImportPlanner">
+                            <svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path d="M4 4h12v12H4V4zm2 2v8h8V6H6zm2 2h4v4H8V8z"/></svg>
+                            Import MS Planner
+                        </button>
+                        <button class="btn btn-primary btn-lg" id="btnWelcomeImport">
+                            <svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z"/></svg>
+                            Import XML
+                        </button>
+                        <button class="btn btn-secondary btn-lg" id="btnWelcomeNew">
+                            <svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path fill-rule="evenodd" d="M6 2a2 2 0 00-2 2v12a2 2 0 002 2h8a2 2 0 002-2V7.414A2 2 0 0015.414 6L12 2.586A2 2 0 0010.586 2H6zm5 6a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V8z" clip-rule="evenodd"/></svg>
+                            New Project
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Portfolio KPI bar (only shows when projects exist) -->
+                <div id="hubKpiBar" class="hub-kpi-bar hidden">
+                    <div class="hub-kpi"><div class="hub-kpi-val" id="hubKpiProjects">0</div><div class="hub-kpi-label">Projects</div></div>
+                    <div class="hub-kpi"><div class="hub-kpi-val" id="hubKpiAvgProgress">0%</div><div class="hub-kpi-label">Avg Progress</div></div>
+                    <div class="hub-kpi"><div class="hub-kpi-val" id="hubKpiTotalTasks">0</div><div class="hub-kpi-label">Total Tasks</div></div>
+                    <div class="hub-kpi"><div class="hub-kpi-val" id="hubKpiAtRisk">0</div><div class="hub-kpi-label">At Risk</div></div>
+                </div>
+
+                <!-- Hub Toolbar: Search, Sort, Filter -->
+                <div id="hubToolbar" class="hub-toolbar hidden">
+                    <div class="hub-search-box">
+                        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>
+                        <input type="text" id="hubSearchInput" class="hub-search-input" placeholder="Search projects…">
+                    </div>
+                    <select id="hubSortSelect" class="hub-sort-select">
+                        <option value="recent">Sort: Recent</option>
+                        <option value="name">Sort: Name (A-Z)</option>
+                        <option value="name-desc">Sort: Name (Z-A)</option>
+                        <option value="progress">Sort: Progress ↑</option>
+                        <option value="progress-desc">Sort: Progress ↓</option>
+                        <option value="tasks">Sort: Tasks ↑</option>
+                        <option value="health">Sort: Health</option>
+                    </select>
+                    <select id="hubFilterSelect" class="hub-filter-select">
+                        <option value="all">Filter: All</option>
+                        <option value="on-track">🟢 Healthy</option>
+                        <option value="at-risk">🟡 At Risk</option>
+                        <option value="critical">🔴 Critical</option>
+                        <option value="complete">✅ Complete</option>
+                        <option value="not-started">⬜ Not Started</option>
+                        <option value="archived">📥 Archived</option>
+                    </select>
+                </div>
+
+                <!-- Project Cards Grid -->
+                <div id="hubProjectGrid" class="hub-project-grid">
+                    <!-- Cards are rendered dynamically -->
+                </div>
+
+                <!-- Empty state (no projects) -->
+                <div id="hubEmptyState" class="hub-empty-state">
+                    <div class="hub-empty-icon">🗂️</div>
+                    <h2>No Projects Yet</h2>
+                    <p>Import a Microsoft Planner Excel file or create a new project to get started.</p>
+                    <div class="welcome-features">
+                        <div class="feature-item"><div class="feature-icon">📊</div><span>Gantt Charts + Critical Path</span></div>
+                        <div class="feature-item"><div class="feature-icon">📁</div><span>XML + Planner Import</span></div>
+                        <div class="feature-item"><div class="feature-icon">📐</div><span>Baseline & EVM Tracking</span></div>
+                        <div class="feature-item"><div class="feature-icon">👥</div><span>Resource Management</span></div>
+                        <div class="feature-item"><div class="feature-icon">📊</div><span>Portfolio Dashboard</span></div>
+                        <div class="feature-item"><div class="feature-icon">🔒</div><span>100% Local — No Server Needed</span></div>
+                    </div>
+                    <p class="welcome-note">Import XML or MS Planner Excel to get started! Fully offline.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- WORKSPACE -->
+        <div id="workspace" class="workspace hidden">
+            <div id="splitContainer" class="split-container">
+                <!-- TABLE PANEL -->
+                <div id="tablePanel" class="panel table-panel">
+                    <div class="table-wrapper" id="tableWrapper">
+                        <table id="taskTable" class="task-table">
+                            <thead>
+                                <tr>
+                                    <th class="col-select"><input type="checkbox" id="selectAll"></th>
+                                    <th class="col-status" title="Status">⚡</th>
+                                    <th class="col-id sortable" data-sort="id">ID</th>
+                                    <th class="col-wbs">WBS</th>
+                                    <th class="col-name sortable" data-sort="name">Task Name</th>
+                                    <th class="col-duration sortable" data-sort="duration">Duration</th>
+                                    <th class="col-start sortable" data-sort="start">Start</th>
+                                    <th class="col-finish sortable" data-sort="finish">Finish</th>
+                                    <th class="col-pct sortable" data-sort="pct">% Done</th>
+                                    <th class="col-float" title="Total Float">Float</th>
+                                    <th class="col-predecessors">Pred.</th>
+                                    <th class="col-resources">Resources</th>
+                                    <th class="col-cost">Cost</th>
+                                    <th class="col-color" title="Color">🎨</th>
+                                </tr>
+                            </thead>
+                            <tbody id="taskTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <!-- RESIZE HANDLE -->
+                <div id="resizeHandle" class="resize-handle" title="Drag to resize">
+                    <div class="resize-dots"><span></span><span></span><span></span></div>
+                </div>
+                <!-- GANTT PANEL -->
+                <div id="ganttPanel" class="panel gantt-panel">
+                    <div class="gantt-header" id="ganttHeader"></div>
+                    <div class="gantt-body" id="ganttBody">
+                        <canvas id="ganttCanvas" role="img" aria-label="Gantt Chart - project schedule timeline"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RESOURCE VIEW (hidden by default) -->
+            <div id="resourceView" class="resource-view hidden">
+                <div class="resource-sheet">
+                    <div class="resource-header">
+                        <h2>Resources</h2>
+                        <button class="btn btn-ghost" id="btnAddResource">+ Add Resource</button>
+                    </div>
+                    <table class="resource-table" id="resourceTable">
+                        <thead><tr>
+                            <th>ID</th><th>Name</th><th>Type</th><th>Max Units</th><th>Cost/hr</th><th>Total Hours</th><th>Utilization</th><th>Status</th>
+                        </tr></thead>
+                        <tbody id="resourceTableBody"></tbody>
+                    </table>
+                </div>
+                <div class="resource-histogram">
+                    <h3>Resource Load</h3>
+                    <canvas id="histogramCanvas" role="img" aria-label="Resource Histogram" height="200"></canvas>
+                </div>
+            </div>
+
+            <!-- CALENDAR VIEW -->
+            <div id="calendarView" class="calendar-view hidden">
+                <div class="calendar-header-bar">
+                    <h2>📅 Work Calendar & Holidays</h2>
+                    <div class="calendar-nav">
+                        <button class="btn btn-ghost" id="calPrev">◀</button>
+                        <span id="calMonthLabel" class="cal-month-label">April 2026</span>
+                        <button class="btn btn-ghost" id="calNext">▶</button>
+                    </div>
+                </div>
+                <div class="calendar-info-bar">
+                    <span id="calPresetLabel" class="cal-preset-tag">Western (Mon-Fri)</span>
+                    <span id="calHolidayCount" class="cal-holiday-tag">0 holidays loaded</span>
+                    <span id="calCountryFlags"></span>
+                </div>
+                <div class="calendar-grid" id="calendarGrid"></div>
+                <div class="calendar-legend">
+                    <span class="legend-item"><span class="legend-dot working"></span> Working</span>
+                    <span class="legend-item"><span class="legend-dot weekend"></span> Weekend</span>
+                    <span class="legend-item"><span class="legend-dot holiday"></span> Holiday</span>
+                    <span class="legend-item"><span class="legend-dot today"></span> Today</span>
+                </div>
+                <div class="calendar-holidays-list" id="calendarHolidaysList"></div>
+            </div>
+
+            <!-- DASHBOARD VIEW -->
+            <div id="dashboardView" class="dashboard-view hidden">
+                <div class="dash-kpi-row" id="dashKpiRow">
+                    <div class="kpi-card kpi-progress"><div class="kpi-label">Overall Progress</div><div class="kpi-value" id="kpiProgress">0%</div><div class="kpi-sub" id="kpiProgressSub">—</div></div>
+                    <div class="kpi-card kpi-tasks"><div class="kpi-label">Tasks</div><div class="kpi-value" id="kpiTasks">0</div><div class="kpi-sub" id="kpiTasksSub">—</div></div>
+                    <div class="kpi-card kpi-critical"><div class="kpi-label">Critical</div><div class="kpi-value" id="kpiCritical">0</div><div class="kpi-sub" id="kpiCriticalSub">—</div></div>
+                    <div class="kpi-card kpi-cost"><div class="kpi-label">Cost</div><div class="kpi-value" id="kpiCost">$0</div><div class="kpi-sub" id="kpiCostSub">—</div></div>
+                    <div class="kpi-card kpi-time"><div class="kpi-label">Days Left</div><div class="kpi-value" id="kpiDaysLeft">—</div><div class="kpi-sub" id="kpiTimeSub">—</div></div>
+                </div>
+                <div class="dash-charts-row">
+                    <div class="dash-card">
+                        <h3>Task Status</h3>
+                        <canvas id="dashDonut" role="img" aria-label="Task Completion Donut Chart" width="220" height="220"></canvas>
+                        <div class="dash-legend" id="dashDonutLegend"></div>
+                    </div>
+                    <div class="dash-card dash-card-wide">
+                        <h3>Phase Progress</h3>
+                        <canvas id="dashBars" role="img" aria-label="Task Status Bar Chart" height="180"></canvas>
+                    </div>
+                </div>
+                <div class="dash-card dash-card-full">
+                    <h3>S-Curve — Planned vs Actual</h3>
+                    <canvas id="dashSCurve" role="img" aria-label="S-Curve Progress Chart" height="220"></canvas>
+                </div>
+                <div class="dash-card dash-card-full">
+                    <h3>Project Timeline</h3>
+                    <canvas id="dashTimeline" role="img" aria-label="Project Timeline" height="60"></canvas>
+                </div>
+                <div class="dash-card dash-card-full" id="dashAttentionCard">
+                    <h3>⚠️ Needs Attention</h3>
+                    <div id="dashAttentionList" class="dash-attention-list"></div>
+                </div>
+                <!-- EVM Section -->
+                <div class="dash-card dash-card-full" id="dashEvmCard">
+                    <h3>📈 Earned Value Management (EVM)</h3>
+                    <div class="evm-kpi-row" id="evmKpiRow">
+                        <div class="evm-kpi"><span class="evm-label">SPI</span><span class="evm-val" id="evmSPI">—</span></div>
+                        <div class="evm-kpi"><span class="evm-label">CPI</span><span class="evm-val" id="evmCPI">—</span></div>
+                        <div class="evm-kpi"><span class="evm-label">SV</span><span class="evm-val" id="evmSV">—</span></div>
+                        <div class="evm-kpi"><span class="evm-label">CV</span><span class="evm-val" id="evmCV">—</span></div>
+                        <div class="evm-kpi"><span class="evm-label">EAC</span><span class="evm-val" id="evmEAC">—</span></div>
+                        <div class="evm-kpi"><span class="evm-label">VAC</span><span class="evm-val" id="evmVAC">—</span></div>
+                    </div>
+                    <canvas id="evmChart" role="img" aria-label="Earned Value Management Chart" height="200"></canvas>
+                </div>
+            </div>
+
+            <!-- NETWORK VIEW -->
+            <div id="networkView" class="network-view hidden">
+
+                <!-- Top toolbar row -->
+                <div class="network-toolbar">
+                    <h3 class="network-title">🔗 Network / PERT</h3>
+                    <div class="network-controls">
+                        <!-- Zoom -->
+                        <button class="btn btn-ghost btn-xs" id="ndZoomIn"  title="Zoom In (+)">＋</button>
+                        <button class="btn btn-ghost btn-xs" id="ndZoomOut" title="Zoom Out (-)">－</button>
+                        <button class="btn btn-ghost btn-xs" id="ndFit"     title="Fit to Screen (F)">⊡</button>
+                        <div class="divider-v"></div>
+                        <!-- Node size mode -->
+                        <button class="btn btn-ghost btn-xs nd-mode-btn active" data-mode="normal"  title="Normal — full PERT box">📋 Normal</button>
+                        <button class="btn btn-ghost btn-xs nd-mode-btn"        data-mode="compact" title="Compact — small nodes">▤ Compact</button>
+                        <button class="btn btn-ghost btn-xs nd-mode-btn"        data-mode="micro"   title="Micro — overview only">⬛ Micro</button>
+                        <div class="divider-v"></div>
+                        <!-- Filters -->
+                        <select id="ndFilter" class="filter-select" style="width:auto;font-size:0.72rem" title="Filter by status">
+                            <option value="all">All Tasks</option>
+                            <option value="critical">🔴 Critical Path</option>
+                            <option value="late">⏰ Late Tasks</option>
+                            <option value="atrisk">⚠️ At Risk</option>
+                        </select>
+                        <div class="divider-v"></div>
+                        <!-- Search -->
+                        <div class="search-box" style="width:160px">
+                            <svg viewBox="0 0 20 20" fill="currentColor" width="12" height="12"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>
+                            <input type="text" id="ndSearch" placeholder="Find task…" class="search-input">
+                        </div>
+                        <div class="divider-v"></div>
+                        <!-- Export -->
+                        <button class="btn btn-ghost btn-xs" id="ndExport" title="Export as PNG">📷 PNG</button>
+                    </div>
+                    <span class="network-hint">Click = impact chain · Dbl = details · F = fit · +/- = zoom</span>
+                </div>
+
+                <!-- Stats bar row -->
+                <div class="nd-stats-bar" id="ndStatsBar">
+                    <!-- Populated by NetworkDiagram._renderStatsBar() -->
+                </div>
+
+                <div class="network-canvas-wrap" id="networkCanvasWrap">
+                    <canvas id="networkCanvas" role="img" aria-label="Network Dependency Diagram"></canvas>
+                </div>
+            </div>
+
+            <!-- D.1: BOARD / KANBAN VIEW -->
+            <div id="boardView" class="board-view hidden">
+                <div class="board-toolbar">
+                    <h3 class="board-title">📋 Board View</h3>
+                    <div class="board-toolbar-right">
+                        <select id="boardGroupBy" class="filter-select" style="width:auto">
+                            <option value="status">Group by Status</option>
+                            <option value="resource">Group by Resource</option>
+                            <option value="tag">Group by Tag</option>
+                        </select>
+                        <input type="text" id="boardSearch" class="search-input" placeholder="Filter cards…" style="width:160px">
+                    </div>
+                </div>
+                <div class="board-columns" id="boardColumns"></div>
+            </div>
+
+            <!-- C.2: ADVANCED FILTER PANEL (dropdown) -->
+            <div id="advFilterPanel" class="adv-filter-panel hidden">
+                <div class="adv-filter-header">
+                    <span class="adv-filter-title">🔍 Advanced Filters</span>
+                    <button id="btnClearFilters" class="btn btn-ghost btn-xs">Clear All</button>
+                    <button id="btnCloseAdvFilter" class="adv-filter-close">&times;</button>
+                </div>
+                <div class="adv-filter-body">
+                    <div class="adv-filter-row">
+                        <label>Tags</label>
+                        <div id="advFilterTags" class="adv-tag-list"></div>
+                    </div>
+                    <div class="adv-filter-row">
+                        <label>Resource</label>
+                        <select id="advFilterResource" class="filter-select" style="width:100%">
+                            <option value="">All Resources</option>
+                        </select>
+                    </div>
+                    <div class="adv-filter-row">
+                        <label>Start After</label>
+                        <input type="date" id="advFilterStartAfter" class="date-input-sm">
+                    </div>
+                    <div class="adv-filter-row">
+                        <label>Finish Before</label>
+                        <input type="date" id="advFilterFinishBefore" class="date-input-sm">
+                    </div>
+                    <div class="adv-filter-row">
+                        <label>% Complete</label>
+                        <div style="display:flex;gap:6px;align-items:center">
+                            <input type="number" id="advFilterPctMin" class="date-input-sm" placeholder="Min" min="0" max="100" style="width:60px">
+                            <span style="color:var(--text-muted)">–</span>
+                            <input type="number" id="advFilterPctMax" class="date-input-sm" placeholder="Max" min="0" max="100" style="width:60px">
+                        </div>
+                    </div>
+                    <div class="adv-filter-row">
+                        <label>Presets</label>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap" id="advFilterPresets"></div>
+                    </div>
+                </div>
+                <div class="adv-filter-footer">
+                    <button id="btnSaveFilterPreset" class="btn btn-ghost btn-xs">💾 Save Preset</button>
+                    <button id="btnApplyAdvFilter" class="btn btn-primary btn-xs">Apply</button>
+                </div>
+            </div>
+
+            <!-- C.4: BATCH OPERATIONS TOOLBAR (floats above table) -->
+            <div id="batchToolbar" class="batch-toolbar hidden">
+                <span id="batchCount" class="batch-count">0 selected</span>
+                <div class="batch-actions">
+                    <button class="btn btn-ghost btn-xs" id="btnBatchStatus">Set %</button>
+                    <button class="btn btn-ghost btn-xs" id="btnBatchResource">Set Resource</button>
+                    <button class="btn btn-ghost btn-xs" id="btnBatchIndent">→ Indent</button>
+                    <button class="btn btn-ghost btn-xs" id="btnBatchOutdent">← Outdent</button>
+                    <button class="btn btn-ghost btn-xs" id="btnBatchDelete" style="color:#ef4444">🗑 Delete</button>
+                    <button class="btn btn-ghost btn-xs" id="btnBatchClear">&times; Deselect</button>
+                </div>
+            </div>
+
+            <!-- D.4: CUSTOM FIELDS MANAGER MODAL -->
+            <div id="modalCustomFields" class="modal-overlay hidden">
+                <div class="modal" style="max-width:480px">
+                    <div class="modal-header">
+                        <h3>⚙️ Custom Fields</h3>
+                        <button class="btn-close" id="btnCloseCustomFields">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="customFieldsList" class="cf-list"></div>
+                        <div class="cf-add-form">
+                            <input type="text" id="cfNewName" placeholder="Field name…" class="pf-input" style="flex:1">
+                            <select id="cfNewType" class="filter-select" style="width:auto">
+                                <option value="text">Text</option>
+                                <option value="number">Number</option>
+                                <option value="date">Date</option>
+                                <option value="dropdown">Dropdown</option>
+                            </select>
+                            <button class="btn btn-primary btn-xs" id="btnAddCustomField">+ Add</button>
+                        </div>
+                        <div id="cfDropdownOptions" class="hidden" style="margin-top:8px">
+                            <label style="font-size:0.7rem;color:var(--text-muted)">Options (comma separated)</label>
+                            <input type="text" id="cfDropdownOptionsList" placeholder="Option A, Option B, Option C" class="pf-input" style="margin-top:4px">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PORTFOLIO VIEW -->
+            <div id="portfolioView" class="portfolio-view hidden">
+
+                <!-- Command Bar -->
+                <div class="pf-command-bar">
+                    <div class="pf-command-left">
+                        <h2 class="pf-title">Portfolio Overview</h2>
+                        <span class="pf-project-count" id="pfProjectCount">0 Projects</span>
+                    </div>
+                    <div class="pf-command-right">
+                        <div class="pf-view-toggle">
+                            <button class="pf-vtoggle active" data-pfview="dashboard">Dashboard</button>
+                            <button class="pf-vtoggle" data-pfview="table">Table</button>
+                            <button class="pf-vtoggle" data-pfview="timeline">Timeline</button>
+                            <button class="pf-vtoggle" data-pfview="resources">👥 Resources</button>
+                        </div>
+                        <button class="btn btn-ghost btn-sm" id="btnPortfolioImport">📥 Import</button>
+                        <button class="btn btn-ghost btn-sm" id="btnCompareSelected">⚖️ Compare</button>
+                        <button class="btn btn-primary btn-sm" id="btnPortfolioExport">📄 Export PDF</button>
+                    </div>
+                </div>
+
+                <!-- KPI Strip (6 cards) -->
+                <div class="pf-kpi-strip">
+                    <div class="pf-kpi-card" style="--pf-kpi-color:#6366f1">
+                        <div class="pf-kpi-label">Total Projects</div>
+                        <div class="pf-kpi-value" id="pfKpiProjects">0</div>
+                        <div class="pf-kpi-trend" id="pfKpiProjectsTrend">—</div>
+                        <div class="pf-kpi-icon">📊</div>
+                    </div>
+                    <div class="pf-kpi-card" style="--pf-kpi-color:#22c55e">
+                        <div class="pf-kpi-label">Avg Progress</div>
+                        <div class="pf-kpi-value" id="pfKpiProgress">0%</div>
+                        <div class="pf-kpi-trend" id="pfKpiProgressTrend">—</div>
+                        <div class="pf-kpi-icon">📈</div>
+                    </div>
+                    <div class="pf-kpi-card" style="--pf-kpi-color:#3b82f6">
+                        <div class="pf-kpi-label">Total Tasks</div>
+                        <div class="pf-kpi-value" id="pfKpiTasks">0</div>
+                        <div class="pf-kpi-trend" id="pfKpiTasksTrend">—</div>
+                        <div class="pf-kpi-icon">✅</div>
+                    </div>
+                    <div class="pf-kpi-card" style="--pf-kpi-color:#8b5cf6">
+                        <div class="pf-kpi-label">Portfolio SPI</div>
+                        <div class="pf-kpi-value" id="pfKpiSpi">—</div>
+                        <div class="pf-kpi-trend" id="pfKpiSpiTrend">—</div>
+                        <div class="pf-kpi-icon">⏱</div>
+                    </div>
+                    <div class="pf-kpi-card" style="--pf-kpi-color:#f59e0b">
+                        <div class="pf-kpi-label">At Risk</div>
+                        <div class="pf-kpi-value" id="pfKpiRisk">0</div>
+                        <div class="pf-kpi-trend" id="pfKpiRiskTrend">—</div>
+                        <div class="pf-kpi-icon">⚠️</div>
+                    </div>
+                    <div class="pf-kpi-card" style="--pf-kpi-color:#ef4444">
+                        <div class="pf-kpi-label">Overdue Tasks</div>
+                        <div class="pf-kpi-value" id="pfKpiOverdue">0</div>
+                        <div class="pf-kpi-trend" id="pfKpiOverdueTrend">—</div>
+                        <div class="pf-kpi-icon">🔴</div>
+                    </div>
+                </div>
+
+                <!-- Health Distribution Bar -->
+                <div class="pf-health-strip">
+                    <div class="pf-health-label">Portfolio Health Distribution</div>
+                    <div class="pf-health-bar">
+                        <div class="pf-health-seg" id="pfHealthComplete" style="width:0%;background:#6366f1;border-radius:5px 0 0 5px"></div>
+                        <div class="pf-health-seg" id="pfHealthHealthy" style="width:0%;background:#22c55e"></div>
+                        <div class="pf-health-seg" id="pfHealthAtRisk" style="width:0%;background:#f59e0b"></div>
+                        <div class="pf-health-seg" id="pfHealthCritical" style="width:0%;background:#ef4444;border-radius:0 5px 5px 0"></div>
+                    </div>
+                    <div class="pf-health-legend" id="pfHealthLegend"></div>
+                </div>
+
+                <!-- Dashboard View -->
+                <div id="pfDashboardView">
+                    <div class="pf-charts-row">
+                        <!-- Progress Comparison -->
+                        <div class="pf-card">
+                            <div class="pf-chart-header">
+                                <h3>Project Progress</h3>
+                                <span class="pf-chart-badge" id="pfProgressBadge">Live</span>
+                            </div>
+                            <div id="pfProgressBars" class="pf-progress-bars"></div>
+                        </div>
+                        <!-- Task Donut -->
+                        <div class="pf-card">
+                            <div class="pf-chart-header">
+                                <h3>Task Distribution</h3>
+                                <span class="pf-chart-badge" id="pfTasksBadge">0 tasks</span>
+                            </div>
+                            <div class="pf-donut-wrap">
+                                <canvas id="pfDonutCanvas" width="160" height="160" role="img" aria-label="Task distribution"></canvas>
+                                <div id="pfDonutLegend" class="pf-donut-legend"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Master Timeline full-width -->
+                    <div class="pf-card">
+                        <div class="pf-chart-header">
+                            <h3>Master Timeline</h3>
+                        </div>
+                        <div id="pfTimelineHtml" class="pf-timeline-wrap"></div>
+                    </div>
+
+                    <!-- Bottom Row -->
+                    <div class="pf-bottom-row">
+                        <div class="pf-card">
+                            <div class="pf-chart-header">
+                                <h3><span style="color:#ef4444">⚠</span> Needs Attention</h3>
+                            </div>
+                            <div id="pfAttentionList" class="pf-attention-list"></div>
+                        </div>
+                        <div class="pf-card">
+                            <div class="pf-chart-header">
+                                <h3><span style="color:#8b5cf6">👥</span> Resource Workload</h3>
+                                <span class="pf-chart-badge">Next 4 Weeks</span>
+                            </div>
+                            <div id="pfHeatmap" class="pf-heatmap-wrap"></div>
+                        </div>
+                    </div>
+
+                    <!-- E.3: Bubble Chart — Health vs Progress -->
+                    <div class="pf-card" style="margin-top:12px">
+                        <div class="pf-chart-header">
+                            <h3>🫧 Portfolio Bubble Chart</h3>
+                            <span class="pf-chart-badge">Health vs Progress · Size = Tasks</span>
+                        </div>
+                        <div style="height:320px;position:relative">
+                            <canvas id="portfolioBubbleCanvas" role="img" aria-label="Portfolio bubble chart" style="width:100%;height:100%"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Table View -->
+                <div id="pfTableView" class="hidden">
+                    <div class="pf-card">
+                        <table class="pf-projects-table" id="portfolioProjectTable">
+                            <thead><tr>
+                                <th style="width:32px"><input type="checkbox" id="pfSelectAll" title="Select all"></th>
+                                <th>Project</th>
+                                <th>Tasks</th>
+                                <th>Progress</th>
+                                <th>SPI</th>
+                                <th>Health</th>
+                                <th>Start</th>
+                                <th>Finish</th>
+                                <th>Budget</th>
+                            </tr></thead>
+                            <tbody id="portfolioTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Timeline View (canvas fallback for export) -->
+                <div id="pfTimelineView" class="hidden">
+                    <div class="pf-card">
+                        <canvas id="portfolioTimeline" role="img" aria-label="Portfolio Timeline" height="200"></canvas>
+                    </div>
+                </div>
+
+                <!-- Resource Allocation View -->
+                <div id="pfResourceView" class="hidden">
+
+                    <!-- Resource KPI strip -->
+                    <div class="pf-res-kpi-strip" id="pfResKpiStrip">
+                        <div class="pf-res-kpi-card">
+                            <div class="pf-res-kpi-icon" style="background:rgba(99,102,241,0.12);color:#6366f1">👥</div>
+                            <div>
+                                <div class="pf-res-kpi-val" id="pfResKpiTotal">—</div>
+                                <div class="pf-res-kpi-lbl">Total Resources</div>
+                            </div>
+                        </div>
+                        <div class="pf-res-kpi-card">
+                            <div class="pf-res-kpi-icon" style="background:rgba(34,197,94,0.12);color:#22c55e">⚡</div>
+                            <div>
+                                <div class="pf-res-kpi-val" id="pfResKpiActive">—</div>
+                                <div class="pf-res-kpi-lbl">Active Now</div>
+                            </div>
+                        </div>
+                        <div class="pf-res-kpi-card">
+                            <div class="pf-res-kpi-icon" style="background:rgba(239,68,68,0.12);color:#ef4444">⚠️</div>
+                            <div>
+                                <div class="pf-res-kpi-val" id="pfResKpiConflicts">—</div>
+                                <div class="pf-res-kpi-lbl">Conflicts</div>
+                            </div>
+                        </div>
+                        <div class="pf-res-kpi-card">
+                            <div class="pf-res-kpi-icon" style="background:rgba(245,158,11,0.12);color:#f59e0b">📋</div>
+                            <div>
+                                <div class="pf-res-kpi-val" id="pfResKpiTasks">—</div>
+                                <div class="pf-res-kpi-lbl">Open Tasks</div>
+                            </div>
+                        </div>
+                        <div class="pf-res-kpi-card">
+                            <div class="pf-res-kpi-icon" style="background:rgba(139,92,246,0.12);color:#8b5cf6">⏳</div>
+                            <div>
+                                <div class="pf-res-kpi-val" id="pfResKpiDays">—</div>
+                                <div class="pf-res-kpi-lbl">Total Remaining Days</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Allocation Timeline -->
+                    <div class="pf-card">
+                        <div class="pf-chart-header">
+                            <h3>Allocation Timeline</h3>
+                            <div style="display:flex;gap:10px;align-items:center">
+                                <span class="pf-res-legend-item"><span class="pf-res-leg-dot"></span>Assignment</span>
+                                <span class="pf-res-legend-item" style="color:#ef4444"><span class="pf-res-leg-dot" style="background:#ef4444;opacity:0.6"></span>Conflict</span>
+                                <span class="pf-chart-badge" id="pfResBadge">Loading…</span>
+                            </div>
+                        </div>
+                        <div id="pfResTimeline" class="pf-res-tl-wrap">
+                            <div class="pf-empty">Loading resource data…</div>
+                        </div>
+                    </div>
+
+                    <!-- Resource Cards -->
+                    <div class="pf-card">
+                        <div class="pf-chart-header">
+                            <h3>Resource Utilization</h3>
+                            <div class="pf-res-legend">
+                                <span class="pf-res-legend-item" style="color:#22c55e"><span class="pf-res-leg-dot" style="background:#22c55e"></span>Free</span>
+                                <span class="pf-res-legend-item" style="color:#6366f1"><span class="pf-res-leg-dot" style="background:#6366f1"></span>Active</span>
+                                <span class="pf-res-legend-item" style="color:#f59e0b"><span class="pf-res-leg-dot" style="background:#f59e0b"></span>Busy</span>
+                                <span class="pf-res-legend-item" style="color:#ef4444"><span class="pf-res-leg-dot" style="background:#ef4444"></span>Overloaded</span>
+                            </div>
+                        </div>
+                        <div id="pfResCards" class="pf-res-cards"></div>
+                    </div>
+
+                    <!-- Conflict Details (hidden until conflicts exist) -->
+                    <div class="pf-card" id="pfConflictCard" style="display:none">
+                        <div class="pf-chart-header">
+                            <h3><span style="color:#ef4444">⚠</span> Allocation Conflicts</h3>
+                            <span class="pf-chart-badge" style="background:rgba(239,68,68,0.15);color:#ef4444" id="pfConflictBadge">0</span>
+                        </div>
+                        <div id="pfConflictList" class="pf-conflict-list"></div>
+                    </div>
+
+                </div>
+
+                <!-- Compare Results -->
+                <div id="compareResults" class="pf-card hidden">
+                    <div class="pf-chart-header" style="margin-bottom:12px">
+                        <h3>⚖️ Project Comparison</h3>
+                        <button class="btn btn-ghost btn-xs" id="btnCloseCompare">✕ Close</button>
+                    </div>
+                    <div id="compareContent"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- NOTIFICATIONS PANEL -->
+    <div id="notifPanel" class="notif-panel hidden">
+        <div class="notif-header"><h3>🔔 Notifications</h3><button class="btn btn-ghost btn-xs" id="btnCloseNotif">&times;</button></div>
+        <div class="notif-body" id="notifBody"></div>
+    </div>
+
+    <!-- ═══════════════ TASK DETAIL PANEL ═══════════════ -->
+    <div id="taskDetailPanel" class="detail-panel hidden">
+        <div class="detail-header">
+            <h3 id="detailTaskName">Task Details</h3>
+            <button class="btn btn-ghost btn-xs" id="btnCloseDetail">&times;</button>
+        </div>
+        <div class="detail-body">
+            <div class="detail-section">
+                <label>Task Name</label>
+                <input type="text" id="detailName" class="form-input">
+            </div>
+            <div class="detail-row">
+                <div class="detail-section"><label>Start</label><input type="date" id="detailStart" class="form-input"></div>
+                <div class="detail-section"><label>Finish</label><input type="date" id="detailFinish" class="form-input"></div>
+            </div>
+            <div class="detail-row">
+                <div class="detail-section"><label>Duration (days)</label><input type="number" id="detailDuration" class="form-input" min="0"></div>
+                <div class="detail-section"><label>% Complete</label><input type="number" id="detailPct" class="form-input" min="0" max="100"></div>
+            </div>
+            <div class="detail-row">
+                <div class="detail-section"><label>Cost</label><input type="number" id="detailCost" class="form-input" min="0" step="0.01"></div>
+                <div class="detail-section">
+                    <label>Color</label>
+                    <input type="color" id="detailColor" class="form-input form-color" value="#6366f1">
+                </div>
+            </div>
+            <!-- Time Tracking (Phase 3.3) -->
+            <div class="detail-row">
+                <div class="detail-section"><label>⏱️ Planned Hours</label><input type="number" id="detailPlannedHours" class="form-input" min="0" step="0.5" placeholder="Auto from duration"></div>
+                <div class="detail-section"><label>⏱️ Actual Hours</label><input type="number" id="detailActualHours" class="form-input" min="0" step="0.5" placeholder="0"></div>
+            </div>
+            <div class="detail-section">
+                <label>Predecessors</label>
+                <input type="text" id="detailPredecessors" class="form-input" placeholder="e.g. 2FS, 3SS+2d">
+            </div>
+            <div class="detail-section">
+                <label>Resources</label>
+                <input type="text" id="detailResources" class="form-input" placeholder="Resource names, comma separated">
+            </div>
+            <div class="detail-section">
+                <label>Notes</label>
+                <textarea id="detailNotes" class="form-input form-textarea" rows="3"></textarea>
+            </div>
+            <div class="detail-section detail-info">
+                <div class="detail-info-row"><span>Status</span><span id="detailStatus">—</span></div>
+                <div class="detail-info-row"><span>Critical</span><span id="detailCritical">—</span></div>
+                <div class="detail-info-row"><span>Total Float</span><span id="detailFloat">—</span></div>
+                <div class="detail-info-row baseline-info"><span>Baseline Start</span><span id="detailBaseStart">—</span></div>
+                <div class="detail-info-row baseline-info"><span>Baseline Finish</span><span id="detailBaseFinish">—</span></div>
+                <div class="detail-info-row baseline-info"><span>Start Variance</span><span id="detailStartVar">—</span></div>
+                <div class="detail-info-row baseline-info"><span>Finish Variance</span><span id="detailFinishVar">—</span></div>
+            </div>
+            <!-- Phase 5: Tags -->
+            <div class="detail-section">
+                <label>🏷️ Tags</label>
+                <div id="detailTags"></div>
+            </div>
+            <!-- Phase 5: Comments -->
+            <div class="detail-section comments-section">
+                <label>💬 Comments</label>
+                <div id="detailComments"></div>
+            </div>
+            <!-- Phase 5: Attachments -->
+            <div class="detail-section attachments-section">
+                <label>📎 Attachments</label>
+                <div id="detailAttachments"></div>
+            </div>
+            <div class="detail-actions">
+                <button class="btn btn-primary" id="btnSaveDetail">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════ FOOTER ═══════════════ -->
+    <footer id="app-footer">
+        <div class="footer-left">
+            <span class="status-indicator" id="statusIndicator"><span class="status-dot"></span> Ready</span>
+            <span class="server-status" id="serverStatus"></span>
+        </div>
+        <div class="footer-center">
+            <span id="taskCount">0 tasks</span>
+            <span class="footer-sep">|</span>
+            <span id="projectDuration">—</span>
+            <span class="footer-sep">|</span>
+            <span id="criticalInfo">—</span>
+        </div>
+        <div class="footer-right">
+            <span id="autoSaveStatus" class="auto-save-status">💾 Auto-saved</span>
+            <span id="storageIndicator" class="auto-save-status" style="margin-left:6px;font-size:0.65rem;opacity:0.7">📦 Browser</span>
+            <div class="divider-v"></div>
+            <button class="btn btn-ghost btn-xs" id="btnZoomIn" title="Zoom In" disabled>+</button>
+            <span id="zoomLevel" class="zoom-level">Days</span>
+            <button class="btn btn-ghost btn-xs" id="btnZoomOut" title="Zoom Out" disabled>−</button>
+        </div>
+    </footer>
+
+    <!-- ═══════════════ MODALS ═══════════════ -->
+    <!-- New Project Modal -->
+    <div id="modalNewProject" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header"><h2>New Project</h2><button class="modal-close" id="btnCloseNewProject">&times;</button></div>
+            <div class="modal-body">
+                <div class="form-group"><label for="inputProjectName">Project Name</label><input type="text" id="inputProjectName" placeholder="My Project" class="form-input"></div>
+                <div class="form-group"><label for="inputProjectManager">Project Manager</label><input type="text" id="inputProjectManager" placeholder="Name" class="form-input"></div>
+                <div class="form-row">
+                    <div class="form-group"><label for="inputStartDate">Start Date</label><input type="date" id="inputStartDate" class="form-input"></div>
+                    <div class="form-group"><label for="inputCalendar">Calendar</label><select id="inputCalendar" class="form-input"><option value="standard">Standard (Mon-Fri)</option><option value="24hour">24 Hours</option></select></div>
+                </div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-ghost" id="btnCancelNewProject">Cancel</button><button class="btn btn-primary" id="btnCreateProject">Create Project</button></div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="modalSettings" class="modal-overlay hidden">
+        <div class="modal modal-wide">
+            <div class="modal-header"><h2>Settings</h2><button class="modal-close" id="btnCloseSettings">&times;</button></div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <div class="form-group"><label>Date Format</label><select id="settingDateFormat" class="form-input"><option value="YYYY-MM-DD">2026-04-11</option><option value="DD/MM/YYYY">11/04/2026</option><option value="MM/DD/YYYY">04/11/2026</option><option value="DD MMM YYYY">11 Apr 2026</option></select></div>
+                    <div class="form-group"><label>Currency</label><input type="text" id="settingCurrency" value="$" class="form-input" maxlength="5"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label>Hours Per Day</label><input type="number" id="settingHoursPerDay" value="8" min="1" max="24" class="form-input"></div>
+                </div>
+                <h4 style="margin-top:8px;color:var(--text-secondary)">Visible Columns</h4>
+                <div class="form-row">
+                    <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowWBS" checked><span class="toggle-switch"></span>WBS</label></div>
+                    <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowCost" checked><span class="toggle-switch"></span>Cost</label></div>
+                    <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowFloat" checked><span class="toggle-switch"></span>Float</label></div>
+                    <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowColor"><span class="toggle-switch"></span>Color</label></div>
+                </div>
+                <h4 style="margin-top:8px;color:var(--text-secondary)">Gantt Options</h4>
+                <div class="form-row">
+                    <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowBaseline" checked><span class="toggle-switch"></span>Show Baseline</label></div>
+                    <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowCritical" checked><span class="toggle-switch"></span>Highlight Critical Path</label></div>
+                    <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowLinks" checked><span class="toggle-switch"></span>Show Dependencies</label></div>
+                </div>
+
+                <h4 style="margin-top:12px;color:var(--text-secondary)">🖼️ Report Logo</h4>
+                <div class="form-row" style="align-items:center;gap:10px">
+                    <div id="logoPreviewBox" style="width:80px;height:30px;border:1px dashed var(--border-default);border-radius:6px;display:flex;align-items:center;justify-content:center;overflow:hidden;background:var(--bg-elevated);flex-shrink:0">
+                        <img id="logoPreviewImg" src="" alt="" style="max-width:76px;max-height:26px;display:none">
+                        <span id="logoPlaceholder" style="font-size:0.65rem;color:var(--text-muted)">No logo</span>
+                    </div>
+                    <div class="form-group" style="flex:1;gap:4px;display:flex">
+                        <input type="file" id="inputLogoFile" accept="image/png,image/jpeg,image/svg+xml,image/webp" style="display:none">
+                        <button class="btn btn-planner btn-sm" id="btnChooseLogo">📁 Choose Logo</button>
+                        <button class="btn btn-ghost btn-sm" id="btnClearLogo">✕ Clear</button>
+                    </div>
+                </div>
+
+                <h4 style="margin-top:12px;color:var(--text-secondary)">💾 Storage Backend</h4>
+                <div class="form-row" style="align-items:center">
+                    <div class="form-group" style="flex:0 0 auto">
+                        <span id="serverStatusBadge" class="server-badge offline">🔴 Browser Mode</span>
+                    </div>
+                    <div class="form-group" style="flex:1">
+                        <label>Server URL</label>
+                        <input type="text" id="settingServerURL" class="form-input" placeholder="http://localhost:3456" style="font-size:0.75rem">
+                    </div>
+                    <div class="form-group" style="flex:0 0 auto">
+                        <button class="btn btn-planner btn-sm" id="btnTestServer">🔌 Test Connection</button>
+                    </div>
+                </div>
+                <div id="serverSettingsPanel" class="hidden" style="margin-top:6px">
+                    <div class="form-row">
+                        <div class="form-group" style="flex:1">
+                            <label>Active Database</label>
+                            <select id="settingActiveDB" class="form-input"></select>
+                        </div>
+                        <div class="form-group" style="flex:0 0 auto">
+                            <button class="btn btn-planner btn-sm" id="btnNewDB">+ New Database</button>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group" style="flex:1">
+                            <label>Data Directory</label>
+                            <input type="text" id="settingDataDir" class="form-input" placeholder="/path/to/data" style="font-size:0.75rem" readonly>
+                        </div>
+                        <div class="form-group" style="flex:0 0 auto">
+                            <button class="btn btn-planner btn-sm" id="btnChangeDataDir">📂 Change</button>
+                        </div>
+                    </div>
+                    <div style="margin-top:8px;text-align:right">
+                        <button class="btn btn-ghost btn-sm" id="btnShutdownServer" style="color:#ef4444;font-size:0.7rem">⏹ Stop Server</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-primary" id="btnSaveSettings">Save</button></div>
+        </div>
+    </div>
+
+    <!-- Folder Browser Modal -->
+    <div id="modalFolderBrowser" class="modal-overlay hidden">
+        <div class="modal modal-wide">
+            <div class="modal-header"><h2>📂 Choose Data Directory</h2><button class="modal-close" id="btnCloseFolderBrowser">&times;</button></div>
+            <div class="modal-body" style="max-height:400px;overflow:auto">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+                    <button class="btn btn-ghost btn-sm" id="btnFolderUp">⬆️ Up</button>
+                    <div id="folderBreadcrumb" style="font-size:0.75rem;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-family:monospace"></div>
+                </div>
+                <div id="folderList" style="display:flex;flex-direction:column;gap:2px"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" id="btnCancelFolder">Cancel</button>
+                <button class="btn btn-primary" id="btnSelectFolder">✅ Select This Folder</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Resource Modal -->
+    <div id="modalAddResource" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header"><h2>Add Resource</h2><button class="modal-close" id="btnCloseAddResource">&times;</button></div>
+            <div class="modal-body">
+                <div class="form-group"><label>Name</label><input type="text" id="inputResName" class="form-input" placeholder="Resource name"></div>
+                <div class="form-row">
+                    <div class="form-group"><label>Max Units</label><input type="number" id="inputResUnits" class="form-input" value="1" min="0.1" max="10" step="0.1"></div>
+                    <div class="form-group"><label>Cost/Hour</label><input type="number" id="inputResCost" class="form-input" value="0" min="0"></div>
+                </div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-ghost" id="btnCancelAddResource">Cancel</button><button class="btn btn-primary" id="btnConfirmAddResource">Add</button></div>
+        </div>
+    </div>
+
+    <!-- Work Calendar Settings Modal -->
+    <div id="modalCalendar" class="modal-overlay hidden">
+        <div class="modal modal-wide">
+            <div class="modal-header"><h2>📅 Work Calendar Settings</h2><button class="modal-close" id="btnCloseCalendar">&times;</button></div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Work Week Preset</label>
+                    <select id="calPreset" class="form-input">
+                        <option value="western">🌍 Western (Mon-Fri)</option>
+                        <option value="egypt">🇪🇬 Egypt (Sun-Thu)</option>
+                        <option value="saudi">🇸🇦 Saudi Arabia (Sun-Thu)</option>
+                        <option value="uae">🇦🇪 UAE (Mon-Fri)</option>
+                        <option value="uae_old">🇦🇪 UAE Old (Sun-Thu)</option>
+                        <option value="custom">⚙️ Custom</option>
+                    </select>
+                </div>
+                <div class="form-group" id="customDaysGroup" style="display:none">
+                    <label>Working Days</label>
+                    <div class="day-checkboxes" id="dayCheckboxes">
+                        <label class="day-check"><input type="checkbox" value="0"> Sun</label>
+                        <label class="day-check"><input type="checkbox" value="1" checked> Mon</label>
+                        <label class="day-check"><input type="checkbox" value="2" checked> Tue</label>
+                        <label class="day-check"><input type="checkbox" value="3" checked> Wed</label>
+                        <label class="day-check"><input type="checkbox" value="4" checked> Thu</label>
+                        <label class="day-check"><input type="checkbox" value="5" checked> Fri</label>
+                        <label class="day-check"><input type="checkbox" value="6"> Sat</label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Public Holidays (select countries)</label>
+                    <div class="country-grid" id="countryGrid"></div>
+                </div>
+                <div class="form-group">
+                    <label>Custom Holidays</label>
+                    <div class="custom-holidays-list" id="customHolidaysList"></div>
+                    <div class="form-row" style="margin-top:6px">
+                        <input type="date" id="customHolDate" class="form-input">
+                        <input type="text" id="customHolName" class="form-input" placeholder="Holiday name">
+                        <button class="btn btn-ghost" id="btnAddCustomHoliday">+ Add</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" id="btnCalFetchHolidays">🔄 Fetch Holidays</button>
+                <button class="btn btn-primary" id="btnSaveCalendar">Save Calendar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MPP Modal removed -->
+
+    <!-- Hidden file inputs -->
+    <input type="file" id="fileInput" accept=".xml,.mspdi" style="display:none">
+    <!-- MPP file input removed -->
+    <input type="file" id="filePlannerInput" accept=".xlsx" style="display:none">
+    <input type="file" id="filePlannerInputHub" accept=".xlsx" style="display:none">
+    <input type="file" id="filePlannerInputSidebar" accept=".xlsx" style="display:none">
+    <input type="file" id="fileInputSidebar" accept=".xml,.mspdi" style="display:none">
+    <input type="file" id="filePlannerInputPortfolio" accept=".xlsx" style="display:none">
+
+    <!-- DELETE PROJECT CONFIRM MODAL -->
+    <div id="modalDeleteProject" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-header"><h2>🗑️ Delete Project</h2><button class="modal-close" id="btnCloseDeleteProject">×</button></div>
+            <div class="modal-body">
+                <p id="deleteProjectMsg" style="color:var(--text-secondary);font-size:0.88rem">Are you sure you want to delete this project? This cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" id="btnCancelDelete">Cancel</button>
+                <button class="btn btn-primary" style="background:var(--color-danger)" id="btnConfirmDelete">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GLOBAL SEARCH OVERLAY -->
+    <div id="globalSearchOverlay" class="global-search-overlay hidden">
+        <div class="global-search-box">
+            <div class="global-search-header">
+                <svg viewBox="0 0 20 20" fill="currentColor" width="20" height="20"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>
+                <input type="text" id="globalSearchInput" placeholder="Search tasks across all projects…">
+                <span class="gs-shortcut">ESC</span>
+            </div>
+            <div class="global-search-results" id="globalSearchResults">
+                <div class="gs-empty">Type to search across all projects</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOAST NOTIFICATIONS -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- REPORT MODAL -->
+    <div id="modalReport" class="modal-overlay hidden">
+        <div class="modal modal-wide">
+            <div class="modal-header">
+                <h2>📊 Reports &amp; Exports</h2>
+                <button class="modal-close" id="btnCloseReport">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="report-grid">
+                    <div class="report-option" id="rptPDF">
+                        <div class="report-icon">📋</div>
+                        <div class="report-info">
+                            <h4>PDF Report</h4>
+                            <p>Full project report — cover page, task table, Gantt chart &amp; resources</p>
+                        </div>
+                        <span class="report-badge">PDF</span>
+                    </div>
+                    <div class="report-option" id="rptExcel">
+                        <div class="report-icon">📊</div>
+                        <div class="report-info">
+                            <h4>Excel Export (.xlsx)</h4>
+                            <p>Multi-sheet workbook: Tasks · Resources · Summary · Critical Path</p>
+                        </div>
+                        <span class="report-badge">XLSX</span>
+                    </div>
+                    <div class="report-option" id="rptGanttPNG">
+                        <div class="report-icon">🖼️</div>
+                        <div class="report-info">
+                            <h4>Gantt Chart (PNG)</h4>
+                            <p>Export the Gantt chart as a high-resolution image</p>
+                        </div>
+                        <span class="report-badge">PNG</span>
+                    </div>
+                    <div class="report-option" id="rptDashboard">
+                        <div class="report-icon">📋</div>
+                        <div class="report-info">
+                            <h4>Dashboard Report</h4>
+                            <p>Printable KPI summary + task list — without Resources &amp; Cost</p>
+                        </div>
+                        <span class="report-badge">PRINT</span>
+                    </div>
+                    <div class="report-option" id="rptSummary">
+                        <div class="report-icon">📧</div>
+                        <div class="report-info">
+                            <h4>Copy Summary</h4>
+                            <p>Copy project status summary to clipboard for email or chat</p>
+                        </div>
+                        <select id="summaryFormat" class="report-format-select" onclick="event.stopPropagation()">
+                            <option value="text">Plain Text</option>
+                            <option value="markdown">Markdown</option>
+                            <option value="html">Rich HTML (Email)</option>
+                            <option value="teams">MS Teams</option>
+                        </select>
+                    </div>
+                    <div class="report-option" id="rptPrint">
+                        <div class="report-icon">🖨️</div>
+                        <div class="report-info">
+                            <h4>Print View</h4>
+                            <p>Print-optimized layout — A4 format with header &amp; footer</p>
+                        </div>
+                        <span class="report-badge">PRINT</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- SHORTCUTS MODAL -->
+    <div class="modal-overlay hidden" id="modalShortcuts">
+        <div class="modal modal-wide">
+            <div class="modal-header">
+                <h2>⌨️ Keyboard Shortcuts</h2>
+                <button class="modal-close" onclick="document.getElementById('modalShortcuts').classList.add('hidden')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="shortcut-search">
+                    <input type="text" class="form-input" id="shortcutSearch" placeholder="Search commands...">
+                </div>
+                <div class="shortcut-list" id="shortcutList"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 6b.2 / E.4: Scenarios Modal -->
+    <div id="modalScenarios" class="modal-overlay hidden">
+        <div class="modal" style="max-width:520px">
+            <div class="modal-header">
+                <h3>🎭 What-If Scenarios</h3>
+                <button class="btn-close" id="btnCloseScenariosModal">&times;</button>
+            </div>
+            <div class="modal-body" id="scenariosPanelBody" style="min-height:200px"></div>
+            <div id="scenariosComparePanel" class="hidden" style="border-top:1px solid var(--border-color);padding:12px 16px">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                    <span id="scenariosComparePanelTitle" style="font-weight:600;font-size:0.82rem">Compare</span>
+                </div>
+                <div id="scenariosCompareBody" style="max-height:320px;overflow-y:auto"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- E.5: Plugin Manager Modal -->
+    <div id="modalPluginManager" class="modal-overlay hidden">
+        <div class="modal" style="max-width:480px">
+            <div class="modal-header">
+                <h3>🔌 Plugin Manager</h3>
+                <button class="btn-close" id="btnClosePluginManager">&times;</button>
+            </div>
+            <div class="modal-body" id="pluginManagerBody" style="min-height:200px"></div>
+        </div>
+    </div>
+
+    <!-- F.2: Project Roles Modal -->
+    <div id="modalRoles" class="modal-overlay hidden">
+        <div class="modal" style="max-width:460px">
+            <div class="modal-header">
+                <h3>👥 Project Members & Roles</h3>
+                <button class="btn-close" id="btnCloseRoles">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="membersList" class="cf-list" style="min-height:60px;margin-bottom:12px"></div>
+                <div class="cf-add-form" style="flex-wrap:wrap;gap:6px">
+                    <input type="email" id="newMemberEmail" placeholder="member@email.com" class="pf-input" style="flex:1;min-width:180px">
+                    <select id="newMemberRole" class="filter-select" style="width:auto">
+                        <option>Owner</option><option>Manager</option><option selected>Member</option><option>Viewer</option>
+                    </select>
+                    <button class="btn btn-primary btn-xs" id="btnAddMember">+ Add</button>
+                </div>
+                <p style="font-size:0.68rem;color:var(--text-muted);margin-top:8px">Roles are stored in the project file. Real-time collaboration requires Sprint G (Azure) or Sprint F backend.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- F.3: Webhooks Modal -->
+    <div id="modalWebhooks" class="modal-overlay hidden">
+        <div class="modal" style="max-width:460px">
+            <div class="modal-header">
+                <h3>🔔 Webhooks & Integrations</h3>
+                <button class="btn-close" id="btnCloseWebhooks">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="webhooksList" class="cf-list" style="min-height:60px;margin-bottom:12px"></div>
+                <div class="cf-add-form" style="flex-wrap:wrap;gap:6px">
+                    <input type="url" id="webhookURL" placeholder="https://hooks.slack.com/…" class="pf-input" style="flex:1;min-width:200px">
+                    <select id="webhookEvent" class="filter-select" style="width:auto">
+                        <option value="*">All Events</option>
+                        <option value="project:loaded">Project Loaded</option>
+                        <option value="project:changed">Project Changed</option>
+                        <option value="project:saved">Project Saved</option>
+                    </select>
+                    <button class="btn btn-primary btn-xs" id="btnAddWebhook">+ Add</button>
+                </div>
+                <p style="font-size:0.68rem;color:var(--text-muted);margin-top:8px">Webhooks send POST requests with JSON payload on project events. Use for Slack, Teams, Zapier, etc.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sprint B: Performance & Architecture modules migrated to main.js -->
+    <!-- About Modal -->
+    <div id="modalAbout" class="modal-overlay hidden">
+        <div class="modal" style="max-width:420px">
+            <div class="modal-header">
+                <h3>About ProjectFlow™</h3>
+                <button class="btn-close" id="btnCloseAbout">&times;</button>
+            </div>
+            <div class="modal-body" style="text-align:center;padding:24px">
+                <div style="font-size:3rem;margin-bottom:8px">🚀</div>
+                <h2 style="margin:0;font-size:1.4rem;font-weight:700;background:linear-gradient(135deg,#6366f1,#8b5cf6);-webkit-background-clip:text;-webkit-text-fill-color:transparent">ProjectFlow™</h2>
+                <p style="color:var(--text-muted);font-size:0.75rem;margin:4px 0 16px">Professional Project Management System</p>
+                <div style="background:var(--bg-elevated);border-radius:10px;padding:14px;margin-bottom:16px;text-align:left;font-size:0.78rem;line-height:1.8">
+                    <div><strong>Version:</strong> 6.0</div>
+                    <div><strong>Build:</strong> 2026.04</div>
+                    <div><strong>Engine:</strong> Vanilla JS + HTML5 Canvas</div>
+                    <div><strong>Storage:</strong> IndexedDB / SQLite</div>
+                </div>
+                <div style="border-top:1px solid var(--border-default);padding-top:14px;margin-top:8px">
+                    <p style="font-size:0.75rem;color:var(--text-secondary);margin:0 0 8px">Designed & Developed by</p>
+                    <p style="font-size:1rem;font-weight:600;margin:0 0 10px;color:var(--text-primary)">Ahmed M. Fawzy</p>
+                    <div style="display:flex;gap:8px;justify-content:center">
+                        <a href="https://www.linkedin.com/in/ahmed-m-fawzy" target="_blank" rel="noopener" class="btn btn-planner btn-sm" style="font-size:0.7rem;text-decoration:none;display:inline-flex;align-items:center;gap:4px">
+                            🔗 LinkedIn
+                        </a>
+                        <a href="mailto:Ahmed.m.fawzy@hotmail.com" class="btn btn-ghost btn-sm" style="font-size:0.7rem;text-decoration:none;display:inline-flex;align-items:center;gap:4px">
+                            ✉️ Email
+                        </a>
+                    </div>
+                </div>
+                <p style="font-size:0.65rem;color:var(--text-muted);margin-top:16px;line-height:1.5">
+                    © 2026 Ahmed M. Fawzy. All Rights Reserved.<br>
+                    ProjectFlow™ is a trademark of Ahmed M. Fawzy.<br>
+                    Unauthorized use is strictly prohibited.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Microsoft Auth & Teams SDKs -->
+    <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+    <script src="https://res.cdn.office.net/teams-js/2.24.0/js/MicrosoftTeams.min.js"></script>
+
+    <!-- Sprint B.3: Modular architecture (Vite ESM Entry) -->
+    <script type="module" src="/js/main.js"></script>
+
+    <!-- MS Planner Live Sync Modal -->
+    <div id="modalPlannerSync" class="modal-overlay hidden">
+      <div class="modal" style="max-width:560px;max-height:85vh;overflow-y:auto">
+        <div class="modal-header">
+          <h3>🔄 MS Planner Live Sync</h3>
+          <button class="btn-close" id="btnClosePlannerSync">&times;</button>
+        </div>
+        <div class="modal-body" id="plannerSyncBody" style="min-height:200px"></div>
+      </div>
+    </div>
+
+    <!-- D365 Project Accounting Modal -->
+    <div id="modalD365Sync" class="modal-overlay hidden">
+      <div class="modal" style="max-width:600px;max-height:90vh;overflow-y:auto">
+        <div class="modal-header">
+          <h3>🏢 Dynamics 365 Project Accounting</h3>
+          <button class="btn-close" id="btnCloseD365Sync">&times;</button>
+        </div>
+        <div class="modal-body" id="d365SyncBody" style="min-height:200px"></div>
+      </div>
+    </div>
+</body>
+</html>
