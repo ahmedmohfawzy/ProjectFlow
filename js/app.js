@@ -849,6 +849,25 @@ import { TeamsBridge } from './teams-bridge.js';
         initD365Sync();         // D365 Project Accounting
 
         // ── Teams Bridge: Auto-connect Planner & D365 ─────────
+        // Listen for Planner events BEFORE init so we don't miss them
+        EventBus.on('planner:connected', ({ plans, lastPlanId }) => {
+            if (!plans || plans.length === 0) return;
+            // If only one plan, auto-import it silently
+            if (plans.length === 1) {
+                _autoImportPlan(plans[0].id, plans[0].title);
+                return;
+            }
+            // Multiple plans: show picker modal
+            _showPlanPickerModal(plans, lastPlanId);
+        });
+
+        EventBus.on('planner:needs-signin', () => {
+            // Only show the sign-in toast if we're in a Teams context
+            if (TeamsBridge.isInTeams()) {
+                showToast('info', '🔗 Click "MS Planner Live" to sign in and load your projects.');
+            }
+        });
+
         TeamsBridge.init().then(result => {
             if (result.isInTeams) console.log('[PF] Running inside Microsoft Teams');
             if (result.planner) console.log('[PF] Planner auto-connected:', result.planner.plans?.length, 'plans');
@@ -5644,6 +5663,95 @@ import { TeamsBridge } from './teams-bridge.js';
         } catch(e) {
             showToast('error', 'Planner import failed: ' + e.message);
         } finally { setStatus('Ready'); }
+    }
+
+    /**
+     * Auto-import a single Planner plan on startup (no UI needed)
+     */
+    async function _autoImportPlan(planId, planTitle) {
+        try {
+            setStatus('Loading Planner project…');
+            const imported = await MSGraphClient.importPlan(planId);
+            if (!imported) return;
+            project = imported;
+            _plannerConnectedPlanId = planId;
+            project.tasks.forEach(t => {
+                if (t.start  && !(t.start  instanceof Date)) t.start  = new Date(t.start);
+                if (t.finish && !(t.finish instanceof Date)) t.finish = new Date(t.finish);
+                t.isExpanded = true; t.isVisible = true;
+                if (!t.predecessors)  t.predecessors  = [];
+                if (!t.resourceNames) t.resourceNames = [];
+            });
+            if (project.startDate  && !(project.startDate  instanceof Date)) project.startDate  = new Date(project.startDate);
+            if (project.finishDate && !(project.finishDate instanceof Date)) project.finishDate = new Date(project.finishDate);
+            reindexTasks();
+            activeProjectId = ProjectStore.generateId();
+            onProjectLoaded();
+            TeamsBridge.saveLastPlan(planId);
+            showToast('success', `✅ Loaded from Planner: "${planTitle}" — ${project.tasks.length} tasks`);
+        } catch(e) {
+            showToast('error', 'Auto-import failed: ' + e.message);
+        } finally { setStatus('Ready'); }
+    }
+
+    /**
+     * Show a modal for the user to pick which Planner plan to open.
+     * Highlights the last-used plan.
+     */
+    function _showPlanPickerModal(plans, lastPlanId) {
+        // Build a simple inline modal overlay
+        const overlay = document.createElement('div');
+        overlay.id = 'planPickerOverlay';
+        overlay.style.cssText = `
+            position:fixed;inset:0;background:rgba(0,0,0,0.65);
+            display:flex;align-items:center;justify-content:center;z-index:9999;
+        `;
+
+        const card = document.createElement('div');
+        card.style.cssText = `
+            background:var(--bg-card,#1e1e2e);border:1px solid rgba(255,255,255,0.12);
+            border-radius:14px;padding:28px;width:420px;max-width:92vw;
+            font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+            box-shadow:0 20px 60px rgba(0,0,0,0.5);
+        `;
+
+        card.innerHTML = `
+            <div style="text-align:center;margin-bottom:20px;">
+                <div style="font-size:2rem;">📋</div>
+                <h3 style="margin:8px 0 4px;font-size:1.1rem;color:var(--text-primary,#e2e8f0);">
+                    Select a Planner Project
+                </h3>
+                <p style="margin:0;font-size:0.8rem;color:var(--text-muted,#888);">
+                    ${plans.length} plan${plans.length > 1 ? 's' : ''} found in your account
+                </p>
+            </div>
+            <div id="planPickerList" style="display:flex;flex-direction:column;gap:8px;max-height:300px;overflow-y:auto;"></div>
+        `;
+
+        const list = card.querySelector('#planPickerList');
+        plans.forEach(plan => {
+            const isLast = plan.id === lastPlanId;
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.style.cssText = `
+                width:100%;padding:12px 16px;text-align:left;border-radius:8px;cursor:pointer;
+                border:1px solid ${isLast ? '#6366f1' : 'rgba(255,255,255,0.1)'};
+                background:${isLast ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.04)'};
+                color:var(--text-primary,#e2e8f0);font-size:0.9rem;font-weight:500;
+                transition:all 0.15s;
+            `;
+            btn.innerHTML = `${isLast ? '⭐ ' : ''}${plan.title}`;
+            btn.addEventListener('mouseenter', () => { btn.style.borderColor = '#6366f1'; btn.style.background = 'rgba(99,102,241,0.12)'; });
+            btn.addEventListener('mouseleave', () => { btn.style.borderColor = isLast ? '#6366f1' : 'rgba(255,255,255,0.1)'; btn.style.background = isLast ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.04)'; });
+            btn.addEventListener('click', () => {
+                overlay.remove();
+                _autoImportPlan(plan.id, plan.title);
+            });
+            list.appendChild(btn);
+        });
+
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
     }
 
     // ── D365 Project Accounting ───────────────────────────────

@@ -65,51 +65,44 @@ function saveConfig(cfg) {
 // ============================================================================
 
 /**
- * Auto-connect to Microsoft Planner if config exists
- * @returns {Object|null} - imported plans info or null
+ * Auto-connect to Microsoft Planner using silent auth (no popup, no manual config).
+ * Uses the built-in multi-tenant Client ID — works for any Microsoft 365 org.
+ * @returns {Object|null} - { plans, authenticated } or null if user must sign in
  */
 async function autoConnectPlanner() {
-    const cfg = getSavedConfig();
-    if (!cfg.clientId || !cfg.tenantId) {
-        console.log('[TeamsBridge] No Planner config saved — skipping auto-connect');
-        return null;
-    }
-
     try {
-        // Configure MSAL
-        await MSGraphClient.configure(cfg.clientId, cfg.tenantId);
+        // Try silent sign-in (uses cached MSAL session from localStorage)
+        const silentOk = await MSGraphClient.trySilentSignIn();
 
-        // Try silent auth first
-        if (MSGraphClient.isAuthenticated()) {
-            console.log('[TeamsBridge] Planner: Already authenticated ✓');
-        } else if (_isInTeams) {
-            // In Teams: try SSO
-            try {
-                const token = await microsoftTeams.authentication.getAuthToken();
-                console.log('[TeamsBridge] Teams SSO token obtained ✓');
-                // With SSO token, we'd exchange it via BFF - but for now, try popup
-                await MSGraphClient.signIn();
-            } catch (ssoErr) {
-                console.warn('[TeamsBridge] Teams SSO failed, trying popup:', ssoErr);
-                await MSGraphClient.signIn();
-            }
-        } else {
-            // Not in Teams, need manual sign-in
-            console.log('[TeamsBridge] Planner: Not authenticated — will need manual sign-in');
+        if (!silentOk) {
+            console.log('[TeamsBridge] No cached session — user must sign in manually');
+            EventBus.emit('planner:needs-signin', {});
             return null;
         }
 
-        // Fetch plans
+        console.log('[TeamsBridge] Planner: Silent auth OK ✓');
+
+        // Fetch all plans the user has access to
         const plans = await MSGraphClient.getMyPlans();
         console.log(`[TeamsBridge] Planner: Found ${plans.length} plans ✓`);
 
-        EventBus.emit('planner:connected', { plans });
+        // Restore last-used plan if available
+        const cfg = getSavedConfig();
+        EventBus.emit('planner:connected', { plans, lastPlanId: cfg.lastPlanId || null });
         return { plans, authenticated: true };
 
     } catch (err) {
         console.error('[TeamsBridge] Planner auto-connect failed:', err);
+        EventBus.emit('planner:needs-signin', { error: err.message });
         return null;
     }
+}
+
+/**
+ * Save the last used plan ID so it auto-loads on next startup
+ */
+function saveLastPlan(planId) {
+    saveConfig({ lastPlanId: planId });
 }
 
 // ============================================================================
@@ -298,6 +291,7 @@ export const TeamsBridge = {
     getTeamsContext,
     getSavedConfig,
     saveConfig,
+    saveLastPlan,
     autoConnectPlanner,
     autoConnectD365,
     renderConnectionSetup

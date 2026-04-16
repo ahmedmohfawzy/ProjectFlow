@@ -31,9 +31,13 @@
       "scopes": ["personal"]
     }
   ],
+  "webApplicationInfo": {
+    "id": "5c5eccbf-b7fb-4041-b969-44da0d6cf406",
+    "resource": "api://ahmedmohfawzy.github.io/ProjectFlow/5c5eccbf-b7fb-4041-b969-44da0d6cf406"
+  },
   "permissions": ["identity"],
   "validDomains": [
-    "ahmedmohfawzy.github.io/ProjectFlow"
+    "ahmedmohfawzy.github.io"
   ],
   "showLoadingIndicator": false,
   "isFullScreen": false

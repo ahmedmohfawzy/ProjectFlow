@@ -16,16 +16,22 @@
     const GRAPH_ENDPOINT = 'https://graph.microsoft.com/v1.0';
     let autoSyncInterval = null;
 
-    // ── Pre-configured Azure AD App (set your Client ID here once) ──
-    // Register at: https://portal.azure.com → Azure Active Directory → App registrations
-    // Required: Set redirect URI to your app URL, enable "Single-page application" platform
-    // API Permissions: Microsoft Graph → Delegated → Tasks.ReadWrite, Group.Read.All, User.Read
-    const DEFAULT_CLIENT_ID = '';  // ← Paste your Azure AD Client ID here
-    const DEFAULT_TENANT    = 'common'; // 'common' works with any Microsoft account
+    // ── ProjectFlow Commercial App — Multi-Tenant Azure AD ──
+    // Registered by: Ahmed M. Fawzy | App: ProjectFlow
+    // Supports any Microsoft 365 organization (multi-tenant)
+    const DEFAULT_CLIENT_ID = '5c5eccbf-b7fb-4041-b969-44da0d6cf406';
+    const DEFAULT_TENANT    = 'organizations'; // Any work/school Microsoft account
 
     // ============================================================================
     // AUTHENTICATION
     // ============================================================================
+
+    // Detect the correct redirect URI (works on GitHub Pages, localhost, Teams)
+    function _getRedirectUri() {
+        const origin = window.location.origin;
+        const path   = window.location.pathname.replace(/\/[^/]*$/, '/'); // strip filename
+        return origin + path;
+    }
 
     function configure(clientId, tenantId) {
         try {
@@ -36,28 +42,36 @@
             const config = {
                 auth: {
                     clientId,
-                    authority: `https://login.microsoftonline.com/${tenantId}`,
-                    redirectUri: window.location.origin,
+                    authority: `https://login.microsoftonline.com/${tenantId || DEFAULT_TENANT}`,
+                    redirectUri: _getRedirectUri(),
+                    navigateToLoginRequestUrl: false,
                 },
                 cache: {
                     cacheLocation: 'localStorage',
-                    storeAuthStateInCookie: false,
+                    storeAuthStateInCookie: true, // needed for Teams iframe
                 },
                 system: {
+                    allowNativeBroker: false,
                     loggerOptions: {
-                        loggerCallback: () => {}, // Suppress logs
+                        loggerCallback: () => {},
                         piiLoggingEnabled: false,
                     },
                 },
             };
 
             msalApp = new window.msal.PublicClientApplication(config);
-            localStorage.setItem(CONFIG_KEY, JSON.stringify({ clientId, tenantId }));
+            localStorage.setItem(CONFIG_KEY, JSON.stringify({ clientId, tenantId: tenantId || DEFAULT_TENANT }));
 
             return msalApp.initialize();
         } catch (err) {
             throw new Error(`MSGraph configure failed: ${err.message}`);
         }
+    }
+
+    // Returns admin consent URL for IT admins of client organizations
+    function getAdminConsentUrl(redirectUri) {
+        const uri = redirectUri || _getRedirectUri();
+        return `https://login.microsoftonline.com/organizations/adminconsent?client_id=${DEFAULT_CLIENT_ID}&redirect_uri=${encodeURIComponent(uri)}`;
     }
 
     function signIn() {
@@ -604,30 +618,41 @@
     // ============================================================================
 
     /**
-     * Auto-initialize MSAL from saved config or defaults.
-     * Returns true if MSAL is ready (configure succeeded).
+     * Auto-initialize MSAL using the built-in Client ID (no user input needed).
+     * Always uses DEFAULT_CLIENT_ID — multi-tenant, works for any organization.
      */
     async function _autoInit() {
-        if (msalApp) return true; // Already initialized
-
-        // Try saved config first
+        if (msalApp) return true;
         try {
-            const saved = JSON.parse(localStorage.getItem(CONFIG_KEY) || 'null');
-            if (saved && saved.clientId) {
-                await configure(saved.clientId, saved.tenantId || DEFAULT_TENANT);
-                return true;
-            }
-        } catch (e) { /* ignore parse errors */ }
-
-        // Try default Client ID
-        if (DEFAULT_CLIENT_ID) {
-            try {
-                await configure(DEFAULT_CLIENT_ID, DEFAULT_TENANT);
-                return true;
-            } catch (e) { /* ignore */ }
+            await configure(DEFAULT_CLIENT_ID, DEFAULT_TENANT);
+            return true;
+        } catch (e) {
+            console.warn('[MSGraph] _autoInit failed:', e.message);
+            return false;
         }
+    }
 
-        return false;
+    /**
+     * Try to sign in silently (no popup, no redirect).
+     * Returns true if a cached session was found.
+     */
+    async function trySilentSignIn() {
+        try {
+            const ready = await _autoInit();
+            if (!ready) return false;
+
+            // Handle redirect response first (in case we're returning from a redirect)
+            try { await msalApp.handleRedirectPromise(); } catch (_) { /* ignore */ }
+
+            const accounts = msalApp.getAllAccounts();
+            if (!accounts || accounts.length === 0) return false;
+
+            // Try to get a token silently to confirm the session is valid
+            await msalApp.acquireTokenSilent({ scopes: SCOPES, account: accounts[0] });
+            return true;
+        } catch (e) {
+            return false;
+        }
     }
 
     function renderSetupWizard(container, onComplete) {
@@ -1053,6 +1078,8 @@
         signOut,
         isAuthenticated,
         getAccount,
+        trySilentSignIn,
+        getAdminConsentUrl,
         getMyPlans,
         getGroupPlans,
         getAllMyGroups,
