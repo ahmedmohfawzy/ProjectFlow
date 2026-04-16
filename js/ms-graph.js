@@ -16,6 +16,13 @@
     const GRAPH_ENDPOINT = 'https://graph.microsoft.com/v1.0';
     let autoSyncInterval = null;
 
+    // ── Pre-configured Azure AD App (set your Client ID here once) ──
+    // Register at: https://portal.azure.com → Azure Active Directory → App registrations
+    // Required: Set redirect URI to your app URL, enable "Single-page application" platform
+    // API Permissions: Microsoft Graph → Delegated → Tasks.ReadWrite, Group.Read.All, User.Read
+    const DEFAULT_CLIENT_ID = '';  // ← Paste your Azure AD Client ID here
+    const DEFAULT_TENANT    = 'common'; // 'common' works with any Microsoft account
+
     // ============================================================================
     // AUTHENTICATION
     // ============================================================================
@@ -596,234 +603,294 @@
     // UI: SETUP WIZARD
     // ============================================================================
 
+    /**
+     * Auto-initialize MSAL from saved config or defaults.
+     * Returns true if MSAL is ready (configure succeeded).
+     */
+    async function _autoInit() {
+        if (msalApp) return true; // Already initialized
+
+        // Try saved config first
+        try {
+            const saved = JSON.parse(localStorage.getItem(CONFIG_KEY) || 'null');
+            if (saved && saved.clientId) {
+                await configure(saved.clientId, saved.tenantId || DEFAULT_TENANT);
+                return true;
+            }
+        } catch (e) { /* ignore parse errors */ }
+
+        // Try default Client ID
+        if (DEFAULT_CLIENT_ID) {
+            try {
+                await configure(DEFAULT_CLIENT_ID, DEFAULT_TENANT);
+                return true;
+            } catch (e) { /* ignore */ }
+        }
+
+        return false;
+    }
+
     function renderSetupWizard(container, onComplete) {
         if (!container) {
             throw new Error('renderSetupWizard: container not found.');
         }
-
-        let currentStep = 1;
-        const steps = [
-            { title: 'Azure AD App Details', id: 'step-credentials' },
-            { title: 'Sign In with Microsoft', id: 'step-signin' },
-            { title: 'Select Plan', id: 'step-selectplan' },
-        ];
 
         const wizard = document.createElement('div');
         wizard.className = 'ms-graph-wizard';
         wizard.style.cssText = `
             max-width: 500px;
             margin: 20px auto;
-            padding: 20px;
-            border: 1px solid #ddd;
-            border-radius: 8px;
+            padding: 24px;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: var(--bg-card, #1e1e2e);
         `;
 
-        function renderStep(step) {
+        // ── Status message helper ──
+        function showStatus(msg, type) {
+            let el = wizard.querySelector('.wizard-status');
+            if (!el) {
+                el = document.createElement('div');
+                el.className = 'wizard-status';
+                el.style.cssText = 'padding:10px;border-radius:8px;margin:12px 0;font-size:13px;text-align:center;';
+                wizard.appendChild(el);
+            }
+            el.textContent = msg;
+            el.style.background = type === 'error' ? 'rgba(239,68,68,0.15)' : type === 'success' ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)';
+            el.style.color = type === 'error' ? '#f87171' : type === 'success' ? '#4ade80' : '#60a5fa';
+        }
+
+        // ── Main flow: try auto-init, then decide which step ──
+        async function startWizard() {
             wizard.innerHTML = '';
 
+            // Header
             const header = document.createElement('div');
-            header.style.cssText = 'margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px;';
-            header.textContent = `Step ${step} of ${steps.length}: ${steps[step - 1].title}`;
+            header.style.cssText = 'text-align:center;margin-bottom:20px;';
+            header.innerHTML = `
+                <div style="font-size:2rem;margin-bottom:8px;">📋</div>
+                <h3 style="margin:0 0 4px 0;font-size:1.1rem;">Connect to Microsoft Planner</h3>
+                <p style="margin:0;font-size:0.8rem;color:var(--text-muted,#888);">Sign in with your Microsoft account to import plans</p>
+            `;
             wizard.appendChild(header);
 
-            if (step === 1) {
-                renderCredentialsStep();
-            } else if (step === 2) {
-                renderSignInStep();
-            } else if (step === 3) {
-                renderSelectPlanStep();
+            // Try auto-init
+            const ready = await _autoInit();
+
+            if (!ready) {
+                // No Client ID configured — show input for Client ID only
+                renderClientIdPrompt();
+                return;
+            }
+
+            // Check if already authenticated
+            if (isAuthenticated()) {
+                // Skip sign-in, go straight to plan selection
+                showStatus('✅ Already signed in', 'success');
+                await renderPlanSelection();
+            } else {
+                // Show sign-in button
+                renderSignIn();
             }
         }
 
-        function renderCredentialsStep() {
-            const form = document.createElement('form');
-            form.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
-
-            const clientIdLabel = document.createElement('label');
-            clientIdLabel.textContent = 'Client ID:';
-            clientIdLabel.style.cssText = 'font-weight: 500; margin-top: 10px;';
-
-            const clientIdInput = document.createElement('input');
-            clientIdInput.type = 'text';
-            clientIdInput.placeholder = 'Paste your Azure AD Client ID';
-            clientIdInput.style.cssText = 'padding: 8px; border: 1px solid #ccc; border-radius: 4px;';
-
-            const tenantIdLabel = document.createElement('label');
-            tenantIdLabel.textContent = 'Tenant ID:';
-            tenantIdLabel.style.cssText = 'font-weight: 500; margin-top: 10px;';
-
-            const tenantIdInput = document.createElement('input');
-            tenantIdInput.type = 'text';
-            tenantIdInput.placeholder = 'Paste your Azure AD Tenant ID';
-            tenantIdInput.style.cssText = 'padding: 8px; border: 1px solid #ccc; border-radius: 4px;';
-
-            const infoLink = document.createElement('a');
-            infoLink.href = 'https://learn.microsoft.com/azure/active-directory/develop/quickstart-register-app';
-            infoLink.target = '_blank';
-            infoLink.textContent = 'How to get your app details';
-            infoLink.style.cssText = 'color: #0078d4; text-decoration: none; font-size: 12px;';
-
-            const nextBtn = document.createElement('button');
-            nextBtn.type = 'button';
-            nextBtn.textContent = 'Next';
-            nextBtn.style.cssText = `
-                padding: 10px;
-                background: #0078d4;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-                margin-top: 15px;
+        // ── Fallback: Client ID prompt (only if no default is set) ──
+        function renderClientIdPrompt() {
+            const note = document.createElement('div');
+            note.style.cssText = 'padding:12px;background:rgba(245,158,11,0.1);border-radius:8px;margin-bottom:16px;font-size:0.8rem;color:#fbbf24;line-height:1.5;';
+            note.innerHTML = `
+                <strong>⚠️ One-time setup required</strong><br>
+                Register an app at <a href="https://portal.azure.com" target="_blank" style="color:#60a5fa;">Azure Portal</a> → 
+                Azure AD → App registrations → New registration.<br>
+                Set platform to <strong>Single-page application</strong> with redirect URI: <code style="color:#f59e0b">${window.location.origin}</code>
             `;
+            wizard.appendChild(note);
 
-            nextBtn.addEventListener('click', async (e) => {
-                e.preventDefault();
-                const cId = clientIdInput.value.trim();
-                const tId = tenantIdInput.value.trim();
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.placeholder = 'Paste your Azure AD Client ID';
+            input.style.cssText = 'width:100%;padding:10px;border:1px solid rgba(255,255,255,0.15);border-radius:8px;background:var(--bg-input,#2a2a3e);color:var(--text-primary,#e2e8f0);font-size:13px;box-sizing:border-box;margin-bottom:12px;';
 
-                if (!cId || !tId) {
-                    alert('Please enter both Client ID and Tenant ID.');
-                    return;
-                }
+            const btn = document.createElement('button');
+            btn.textContent = 'Continue';
+            btn.style.cssText = 'width:100%;padding:12px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:white;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s;';
+            btn.addEventListener('mouseenter', () => btn.style.transform = 'translateY(-1px)');
+            btn.addEventListener('mouseleave', () => btn.style.transform = '');
 
+            btn.addEventListener('click', async () => {
+                const clientId = input.value.trim();
+                if (!clientId) { showStatus('Please enter a Client ID', 'error'); return; }
                 try {
-                    await configure(cId, tId);
-                    currentStep = 2;
-                    renderStep(currentStep);
+                    btn.disabled = true;
+                    btn.textContent = 'Configuring...';
+                    await configure(clientId, DEFAULT_TENANT);
+                    // Restart wizard with config ready
+                    await startWizard();
                 } catch (err) {
-                    alert(`Configuration failed: ${err.message}`);
+                    showStatus('Configuration failed: ' + err.message, 'error');
+                    btn.disabled = false;
+                    btn.textContent = 'Continue';
                 }
             });
 
-            form.appendChild(clientIdLabel);
-            form.appendChild(clientIdInput);
-            form.appendChild(tenantIdLabel);
-            form.appendChild(tenantIdInput);
-            form.appendChild(infoLink);
-            form.appendChild(nextBtn);
-
-            wizard.appendChild(form);
+            wizard.appendChild(input);
+            wizard.appendChild(btn);
         }
 
-        function renderSignInStep() {
+        // ── Step 1: Sign In ──
+        function renderSignIn() {
             const signInBtn = document.createElement('button');
             signInBtn.type = 'button';
-            signInBtn.textContent = 'Sign In with Microsoft';
+            signInBtn.innerHTML = `
+                <svg viewBox="0 0 21 21" fill="none" width="20" height="20" style="vertical-align:middle;margin-right:8px;">
+                    <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                    <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                    <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                    <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+                </svg>
+                Sign in with Microsoft
+            `;
             signInBtn.style.cssText = `
-                padding: 12px;
-                background: #0078d4;
+                width: 100%;
+                padding: 14px 20px;
+                background: linear-gradient(135deg, #0078d4, #106ebe);
                 color: white;
                 border: none;
-                border-radius: 4px;
-                font-size: 14px;
+                border-radius: 8px;
+                font-size: 15px;
+                font-weight: 600;
                 cursor: pointer;
-                margin: 20px 0;
+                transition: all 0.2s;
+                display: flex;
+                align-items: center;
+                justify-content: center;
             `;
+            signInBtn.addEventListener('mouseenter', () => signInBtn.style.transform = 'translateY(-2px)');
+            signInBtn.addEventListener('mouseleave', () => signInBtn.style.transform = '');
 
             signInBtn.addEventListener('click', async () => {
                 try {
+                    signInBtn.disabled = true;
+                    signInBtn.style.opacity = '0.7';
+                    signInBtn.innerHTML = '🔄 Signing in...';
                     await signIn();
                     const account = getAccount();
                     if (account) {
-                        const msg = document.createElement('p');
-                        msg.textContent = `Signed in as ${account.email}`;
-                        msg.style.cssText = 'color: #107c10; margin: 10px 0;';
-                        wizard.appendChild(msg);
-
-                        const nextBtn = document.createElement('button');
-                        nextBtn.textContent = 'Next';
-                        nextBtn.style.cssText = `
-                            padding: 10px;
-                            background: #0078d4;
-                            color: white;
-                            border: none;
-                            border-radius: 4px;
-                            cursor: pointer;
-                            margin-top: 15px;
+                        showStatus(`✅ Signed in as ${account.email}`, 'success');
+                        // Remove sign-in button and show plans
+                        signInBtn.remove();
+                        await renderPlanSelection();
+                    } else {
+                        showStatus('Sign-in cancelled or failed', 'error');
+                        signInBtn.disabled = false;
+                        signInBtn.style.opacity = '1';
+                        signInBtn.innerHTML = `
+                            <svg viewBox="0 0 21 21" fill="none" width="20" height="20" style="vertical-align:middle;margin-right:8px;">
+                                <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                                <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                                <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                                <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+                            </svg>
+                            Sign in with Microsoft
                         `;
-                        nextBtn.addEventListener('click', () => {
-                            currentStep = 3;
-                            renderStep(currentStep);
-                        });
-                        wizard.appendChild(nextBtn);
                     }
                 } catch (err) {
-                    alert(`Sign-in failed: ${err.message}`);
+                    showStatus('Sign-in failed: ' + err.message, 'error');
+                    signInBtn.disabled = false;
+                    signInBtn.style.opacity = '1';
+                    signInBtn.innerHTML = `
+                        <svg viewBox="0 0 21 21" fill="none" width="20" height="20" style="vertical-align:middle;margin-right:8px;">
+                            <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                            <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                            <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                            <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+                        </svg>
+                        Sign in with Microsoft
+                    `;
                 }
             });
 
             wizard.appendChild(signInBtn);
         }
 
-        function renderSelectPlanStep() {
-            const loadingMsg = document.createElement('p');
-            loadingMsg.textContent = 'Loading your plans...';
-            loadingMsg.style.cssText = 'color: #666;';
+        // ── Step 2: Select Plan ──
+        async function renderPlanSelection() {
+            const loadingMsg = document.createElement('div');
+            loadingMsg.style.cssText = 'text-align:center;padding:20px;color:var(--text-muted,#888);font-size:0.85rem;';
+            loadingMsg.innerHTML = '🔄 Loading your Planner plans...';
             wizard.appendChild(loadingMsg);
 
-            getMyPlans()
-                .then(plans => {
-                    wizard.innerHTML = '';
-                    const header = document.createElement('div');
-                    header.style.cssText = 'margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px;';
-                    header.textContent = `Step ${currentStep} of ${steps.length}: ${steps[currentStep - 1].title}`;
-                    wizard.appendChild(header);
+            try {
+                const plans = await getMyPlans();
+                loadingMsg.remove();
 
-                    const label = document.createElement('label');
-                    label.textContent = 'Select a Plan:';
-                    label.style.cssText = 'font-weight: 500; display: block; margin-bottom: 10px;';
-                    wizard.appendChild(label);
+                if (!plans || plans.length === 0) {
+                    showStatus('No plans found in your Planner account.', 'error');
+                    return;
+                }
 
-                    const select = document.createElement('select');
-                    select.style.cssText = 'padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 100%;';
+                const label = document.createElement('label');
+                label.textContent = 'Select a Plan to import:';
+                label.style.cssText = 'font-weight:500;display:block;margin-bottom:10px;font-size:0.85rem;color:var(--text-secondary,#a0aec0);';
+                wizard.appendChild(label);
 
-                    const placeholder = document.createElement('option');
-                    placeholder.value = '';
-                    placeholder.textContent = '-- Choose a plan --';
-                    select.appendChild(placeholder);
+                const select = document.createElement('select');
+                select.style.cssText = 'width:100%;padding:10px;border:1px solid rgba(255,255,255,0.15);border-radius:8px;background:var(--bg-input,#2a2a3e);color:var(--text-primary,#e2e8f0);font-size:13px;margin-bottom:12px;';
 
-                    plans.forEach(plan => {
-                        const option = document.createElement('option');
-                        option.value = plan.id;
-                        option.textContent = plan.title;
-                        select.appendChild(option);
-                    });
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = `-- ${plans.length} plan${plans.length > 1 ? 's' : ''} found --`;
+                select.appendChild(placeholder);
 
-                    const completeBtn = document.createElement('button');
-                    completeBtn.type = 'button';
-                    completeBtn.textContent = 'Connect Plan';
-                    completeBtn.style.cssText = `
-                        padding: 10px;
-                        background: #107c10;
-                        color: white;
-                        border: none;
-                        border-radius: 4px;
-                        cursor: pointer;
-                        margin-top: 15px;
-                        width: 100%;
-                    `;
-
-                    completeBtn.addEventListener('click', () => {
-                        const planId = select.value;
-                        if (!planId) {
-                            alert('Please select a plan.');
-                            return;
-                        }
-                        const planTitle = select.options[select.selectedIndex].textContent;
-                        onComplete({ planId, planTitle });
-                    });
-
-                    wizard.appendChild(select);
-                    wizard.appendChild(completeBtn);
-                })
-                .catch(err => {
-                    loadingMsg.textContent = `Error loading plans: ${err.message}`;
-                    loadingMsg.style.cssText = 'color: #c50f1f;';
+                plans.forEach(plan => {
+                    const option = document.createElement('option');
+                    option.value = plan.id;
+                    option.textContent = plan.title;
+                    select.appendChild(option);
                 });
+
+                const importBtn = document.createElement('button');
+                importBtn.type = 'button';
+                importBtn.textContent = '📥 Import Plan';
+                importBtn.style.cssText = `
+                    width: 100%;
+                    padding: 14px;
+                    background: linear-gradient(135deg, #22c55e, #16a34a);
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    font-size: 15px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                `;
+                importBtn.addEventListener('mouseenter', () => importBtn.style.transform = 'translateY(-1px)');
+                importBtn.addEventListener('mouseleave', () => importBtn.style.transform = '');
+
+                importBtn.addEventListener('click', () => {
+                    const planId = select.value;
+                    if (!planId) {
+                        showStatus('Please select a plan', 'error');
+                        return;
+                    }
+                    const planTitle = select.options[select.selectedIndex].textContent;
+                    importBtn.disabled = true;
+                    importBtn.textContent = '⏳ Importing...';
+                    importBtn.style.opacity = '0.7';
+                    onComplete({ planId, planTitle });
+                });
+
+                wizard.appendChild(select);
+                wizard.appendChild(importBtn);
+
+            } catch (err) {
+                loadingMsg.remove();
+                showStatus('Failed to load plans: ' + err.message, 'error');
+            }
         }
 
-        renderStep(currentStep);
+        startWizard();
         container.appendChild(wizard);
     }
 

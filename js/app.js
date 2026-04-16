@@ -3213,8 +3213,7 @@ import { TeamsBridge } from './teams-bridge.js';
 
         // Sidebar actions
         $('btnSidebarNew').addEventListener('click', () => { toggleSidebar(false); showNewProjectModal(); });
-        $('btnSidebarImportPlanner').addEventListener('click', () => { $('filePlannerInputSidebar').click(); });
-        $('filePlannerInputSidebar').addEventListener('change', handlePlannerFileForHub);
+        $('btnSidebarImportPlanner').addEventListener('click', () => { toggleSidebar(false); openPlannerSyncModal(); });
         $('btnSidebarImportXML').addEventListener('click', () => { $('fileInputSidebar').click(); });
         $('fileInputSidebar').addEventListener('change', handleFileImport);
         $('btnSidebarPortfolio').addEventListener('click', () => { toggleSidebar(false); if (!project) { els.welcomeScreen.classList.add('hidden'); els.workspace.classList.remove('hidden'); } setView('portfolio'); });
@@ -3226,8 +3225,7 @@ import { TeamsBridge } from './teams-bridge.js';
 
         // Hub buttons
         if ($('btnHubImportPlanner')) {
-            $('btnHubImportPlanner').addEventListener('click', () => { $('filePlannerInputHub').click(); });
-            $('filePlannerInputHub').addEventListener('change', handlePlannerFileForHub);
+            $('btnHubImportPlanner').addEventListener('click', () => { openPlannerSyncModal(); });
         }
 
         // Portfolio import
@@ -5594,17 +5592,38 @@ import { TeamsBridge } from './teams-bridge.js';
             return;
         }
 
-        if (MSGraphClient.isAuthenticated() && _plannerConnectedPlanId) {
-            // Already connected — show sync panel
+        if (MSGraphClient.isAuthenticated() && _plannerConnectedPlanId && project) {
+            // Already connected with active project — show sync panel
             MSGraphClient.renderSyncPanel(body, project, _plannerConnectedPlanId);
         } else {
-            // Show setup wizard
-            MSGraphClient.renderSetupWizard(body, ({ planId, planTitle }) => {
+            // Show setup wizard — always allow connecting and importing
+            MSGraphClient.renderSetupWizard(body, async ({ planId, planTitle }) => {
                 _plannerConnectedPlanId = planId;
-                showToast('success', `Connected to Planner: "${planTitle}"`);
-                // Re-render sync panel
-                body.innerHTML = '';
-                MSGraphClient.renderSyncPanel(body, project, planId);
+                showToast('info', `Connected to Planner: "${planTitle}". Importing...`);
+                // Always import the plan as a new project
+                try {
+                    setStatus('Importing from MS Planner…');
+                    const imported = await MSGraphClient.importPlan(planId);
+                    if (!imported) { showToast('error', 'Import returned empty project'); return; }
+                    project = imported;
+                    // Pre-process project data
+                    project.tasks.forEach(t => {
+                        if (t.start && !(t.start instanceof Date)) t.start = new Date(t.start);
+                        if (t.finish && !(t.finish instanceof Date)) t.finish = new Date(t.finish);
+                        t.isExpanded = true; t.isVisible = true;
+                        if (!t.predecessors) t.predecessors = [];
+                        if (!t.resourceNames) t.resourceNames = [];
+                    });
+                    if (project.startDate && !(project.startDate instanceof Date)) project.startDate = new Date(project.startDate);
+                    if (project.finishDate && !(project.finishDate instanceof Date)) project.finishDate = new Date(project.finishDate);
+                    reindexTasks();
+                    activeProjectId = ProjectStore.generateId();
+                    onProjectLoaded();
+                    showToast('success', `Imported from Planner: "${project.name}" — ${project.tasks.length} items`);
+                    toggleModal('modalPlannerSync', false);
+                } catch(e) {
+                    showToast('error', 'Planner import failed: ' + e.message);
+                } finally { setStatus('Ready'); }
             });
         }
     }

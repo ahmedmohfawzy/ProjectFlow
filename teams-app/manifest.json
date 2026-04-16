@@ -5,9 +5,9 @@
   "id": "cb85d5a6-ed15-4a0e-8ead-40c6d45491a6",
   "developer": {
     "name": "Ahmed M. Fawzy",
-    "websiteUrl": "https://divine-webshots-consistently-disciplinary.trycloudflare.com",
-    "privacyUrl": "https://divine-webshots-consistently-disciplinary.trycloudflare.com",
-    "termsOfUseUrl": "https://divine-webshots-consistently-disciplinary.trycloudflare.com"
+    "websiteUrl": "https://ahmedmohfawzy.github.io/ProjectFlow",
+    "privacyUrl": "https://ahmedmohfawzy.github.io/ProjectFlow",
+    "termsOfUseUrl": "https://ahmedmohfawzy.github.io/ProjectFlow"
   },
   "name": {
     "short": "ProjectFlow",
@@ -26,14 +26,14 @@
     {
       "entityId": "projectflow-home",
       "name": "ProjectFlow",
-      "contentUrl": "https://divine-webshots-consistently-disciplinary.trycloudflare.com/index.html",
-      "websiteUrl": "https://divine-webshots-consistently-disciplinary.trycloudflare.com/index.html",
+      "contentUrl": "https://ahmedmohfawzy.github.io/ProjectFlow/index.html",
+      "websiteUrl": "https://ahmedmohfawzy.github.io/ProjectFlow/index.html",
       "scopes": ["personal"]
     }
   ],
   "permissions": ["identity"],
   "validDomains": [
-    "divine-webshots-consistently-disciplinary.trycloudflare.com"
+    "ahmedmohfawzy.github.io/ProjectFlow"
   ],
   "showLoadingIndicator": false,
   "isFullScreen": false
