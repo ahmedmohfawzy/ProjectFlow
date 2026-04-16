@@ -3,6 +3,7 @@
  * Microsoft Graph API Client for Live Bi-Directional Planner Sync
  * Uses MSAL.js (PublicClientApplication) with PKCE flow
  */
+import * as msal from '@azure/msal-browser';
 
 
 
@@ -35,10 +36,6 @@
 
     function configure(clientId, tenantId) {
         try {
-            if (!window.msal) {
-                throw new Error('MSAL.js library not loaded. Ensure msal-browser is included via CDN.');
-            }
-
             const config = {
                 auth: {
                     clientId,
@@ -48,7 +45,7 @@
                 },
                 cache: {
                     cacheLocation: 'localStorage',
-                    storeAuthStateInCookie: true, // needed for Teams iframe
+                    storeAuthStateInCookie: true,
                 },
                 system: {
                     allowNativeBroker: false,
@@ -59,7 +56,7 @@
                 },
             };
 
-            msalApp = new window.msal.PublicClientApplication(config);
+            msalApp = new msal.PublicClientApplication(config);
             localStorage.setItem(CONFIG_KEY, JSON.stringify({ clientId, tenantId: tenantId || DEFAULT_TENANT }));
 
             return msalApp.initialize();
