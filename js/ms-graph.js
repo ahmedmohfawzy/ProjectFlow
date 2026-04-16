@@ -557,9 +557,11 @@ import * as msal from '@azure/msal-browser';
                     predecessors:   [],
                     isExpanded:     true,
                     isVisible:      true,
-                    _plannerId:     task.id,
-                    _plannerEtag:   task['@odata.etag'],
+                    _plannerId:       task.id,
+                    _plannerEtag:     task['@odata.etag'],
                     _plannerBucketId: bucket.id,
+                    // Real Azure AD user IDs — needed for correct PATCH/POST assignments
+                    _plannerAssigneeIds: Object.keys(task.assignments || {}),
                 });
             });
         });
@@ -577,35 +579,48 @@ import * as msal from '@azure/msal-browser';
     // MAPPING: PROJECTFLOW → PLANNER (PUSH)
     // ============================================================================
 
+    /**
+     * Safely convert a Date object or ISO date string to "YYYY-MM-DD"
+     */
+    function _toDateStr(val) {
+        if (!val) return null;
+        if (val instanceof Date) return val.toISOString().split('T')[0];
+        if (typeof val === 'string') return val.split('T')[0]; // handle "2026-04-16T00:00:00Z"
+        return null;
+    }
+
     function projectTaskToPlanner(task, bucketId) {
         const body = {
-            title: task.name,
+            title: task.name || '',
         };
 
         if (task.percentComplete !== undefined) {
-            // Round to nearest 0, 50, 100
+            // Planner only accepts 0, 50, or 100
             const rounded = Math.round(task.percentComplete / 50) * 50;
             body.percentComplete = Math.min(100, Math.max(0, rounded));
         }
 
-        if (task.start) {
-            body.startDateTime = `${task.start}T00:00:00Z`;
-        }
+        // Safe date handling — task.start may be a Date object or a string
+        const startStr  = _toDateStr(task.start);
+        const finishStr = _toDateStr(task.finish);
 
-        if (task.finish) {
-            body.dueDateTime = `${task.finish}T23:59:59Z`;
-        }
+        if (startStr)  body.startDateTime = `${startStr}T00:00:00Z`;
+        if (finishStr) body.dueDateTime   = `${finishStr}T23:59:59Z`;
 
-        // Assignments: convert resourceNames to format {userId: {displayName}}
-        if (task.resourceNames && task.resourceNames.length > 0) {
+        // Use REAL Azure AD user IDs stored at import time.
+        // _plannerAssigneeIds is set by plannerToProject and kept up-to-date by _mergeRemoteChanges.
+        // Fallback: if somehow missing, skip assignments (don't send fake IDs).
+        if (task._plannerAssigneeIds && task._plannerAssigneeIds.length > 0) {
             body.assignments = {};
-            task.resourceNames.forEach(name => {
-                const userId = _sanitizeUserId(name);
-                body.assignments[userId] = { '@odata.type': '#microsoft.graph.plannerAssignment' };
+            task._plannerAssigneeIds.forEach(userId => {
+                body.assignments[userId] = {
+                    '@odata.type': '#microsoft.graph.plannerAssignment',
+                    'orderHint': ' !',
+                };
             });
         }
 
-        // Categories: convert tags to appliedCategories {category1: true, ...}
+        // Categories → appliedCategories
         if (task.tags && task.tags.length > 0) {
             body.appliedCategories = {};
             task.tags.forEach(tag => {
@@ -614,11 +629,6 @@ import * as msal from '@azure/msal-browser';
         }
 
         return body;
-    }
-
-    function _sanitizeUserId(name) {
-        // Simple sanitization: replace spaces with dashes, lowercase
-        return name.toLowerCase().replace(/\s+/g, '-');
     }
 
     // ============================================================================
@@ -817,9 +827,12 @@ import * as msal from '@azure/msal-browser';
                     localTask.finish = remote.dueDateTime.split('T')[0];
                 }
 
-                // Resolve user IDs → display names using the cache
+                // Sync assignments: keep real IDs and resolve display names
                 if (remote.assignments && typeof remote.assignments === 'object') {
                     const userIds = Object.keys(remote.assignments);
+                    // Keep real Azure AD IDs for future push operations
+                    localTask._plannerAssigneeIds = userIds;
+                    // Resolve to display names for UI
                     localTask.resourceNames = userIds.map(
                         id => _userCache.get(id) || id.substring(0, 8) + '…'
                     );
