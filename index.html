@@ -27,17 +27,12 @@
     // Force-unregister old Service Workers and clear stale caches on every load.
     // This guarantees the browser always runs the latest HTML + JS.
     if ('serviceWorker' in navigator) {
-        // Unregister any SW not matching the current sw.js
+        // Unregister ALL old service workers (no sw.js on GitHub Pages)
         navigator.serviceWorker.getRegistrations().then(regs => {
-            regs.forEach(r => {
-                // Only keep the current sw.js; unregister any legacy ones
-                if (r.active && !r.active.scriptURL.includes('sw.js')) r.unregister();
-            });
+            regs.forEach(r => r.unregister());
         });
-        // Clear ALL old caches except the current version
-        caches.keys().then(keys => keys.forEach(k => {
-            if (k !== 'projectflow-v4') caches.delete(k);
-        }));
+        // Clear ALL old caches
+        caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
     }
     </script>
     <!-- legacy scripts moved to main.js modules -->
@@ -1518,7 +1513,7 @@
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 
     <!-- Microsoft Auth & Teams SDKs -->
-    <script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/dist/msal-browser.min.js"></script>
     <script src="https://res.cdn.office.net/teams-js/2.24.0/js/MicrosoftTeams.min.js"></script>
 
     <!-- Sprint B.3: Modular architecture (Vite ESM Entry) -->
