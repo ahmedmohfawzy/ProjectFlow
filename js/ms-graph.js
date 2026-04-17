@@ -734,32 +734,14 @@ import * as msal from '@azure/msal-browser';
         }
     }
 
-    async function syncProjectToPlanner(project, planId) {
-        try {
-            const summary = { updated: 0, created: 0, failed: 0 };
-
-            // Only push leaf tasks (outlineLevel > 1, i.e. non-summary/non-bucket tasks)
-            const leafTasks = (project.tasks || []).filter(t => !t.summary && t.outlineLevel !== 1);
-
-            for (const task of leafTasks) {
-                try {
-                    const wasNew = !task._plannerId;
-                    await pushTaskToPlanner(task, planId);
-                    if (wasNew) {
-                        summary.created++;
-                    } else {
-                        summary.updated++;
-                    }
-                } catch (err) {
-                    summary.failed++;
-                    console.warn('[MSGraph] pushTaskToPlanner error:', err.message);
-                }
-            }
-
-            return summary;
-        } catch (err) {
-            throw new Error(`syncProjectToPlanner failed: ${err.message}`);
-        }
+    /**
+     * READ-ONLY MODE: pushing to Planner is disabled.
+     * ProjectFlow treats Planner as the source of truth — data flows IN only.
+     * To push changes, upgrade to the bi-directional sync version.
+     */
+    async function syncProjectToPlanner(_project, _planId) {
+        console.info('[MSGraph] Write-back disabled — this build is read-only from Planner.');
+        return { updated: 0, created: 0, failed: 0, readOnly: true };
     }
 
     // ============================================================================
@@ -774,15 +756,12 @@ import * as msal from '@azure/msal-browser';
 
             autoSyncInterval = setInterval(async () => {
                 try {
-                    // Pull remote changes
+                    // Pull-only: fetch remote changes and merge into local project
                     const { tasks: remoteTasks } = await getPlanDetails(planId);
                     _mergeRemoteChanges(project, remoteTasks);
-
-                    // Push local changes
-                    await syncProjectToPlanner(project, planId);
+                    console.log('[MSGraph] Auto-pull completed ✓');
                 } catch (err) {
-                    // Log but don't crash
-                    console.warn('Auto-sync error:', err.message);
+                    console.warn('[MSGraph] Auto-pull error:', err.message);
                 }
             }, intervalMs);
 
@@ -1135,61 +1114,44 @@ import * as msal from '@azure/msal-browser';
         const buttonGroup = document.createElement('div');
         buttonGroup.style.cssText = 'display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;';
 
+        // ── Read-only badge ──
+        const readOnlyBadge = document.createElement('div');
+        readOnlyBadge.style.cssText = `
+            padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600;
+            background: rgba(99,102,241,0.15); color: #818cf8;
+            border: 1px solid rgba(99,102,241,0.3); margin-bottom: 12px;
+            display: inline-block;
+        `;
+        readOnlyBadge.textContent = '🔒 Read-Only — Planner is the source of truth';
+        panel.insertBefore(readOnlyBadge, buttonGroup);
+
+        // ── Pull button ──
         const pullBtn = document.createElement('button');
-        pullBtn.textContent = 'Pull from Planner';
+        pullBtn.textContent = '🔄 Pull from Planner';
         pullBtn.style.cssText = `
-            padding: 8px 12px;
-            background: #0078d4;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
+            padding: 8px 16px; background: #0078d4; color: white;
+            border: none; border-radius: 6px; cursor: pointer;
+            font-size: 13px; font-weight: 600;
         `;
         pullBtn.addEventListener('click', async () => {
             try {
                 pullBtn.disabled = true;
-                pullBtn.textContent = 'Pulling...';
+                pullBtn.textContent = '⏳ Pulling...';
                 const { tasks: remoteTasks } = await getPlanDetails(planId);
                 _mergeRemoteChanges(project, remoteTasks);
-                syncTime.textContent = `Last sync: ${new Date().toLocaleTimeString()}`;
-                pullBtn.textContent = 'Pull from Planner';
+                syncTime.textContent = `Last pull: ${new Date().toLocaleTimeString()}`;
+                pullBtn.textContent = '🔄 Pull from Planner';
                 pullBtn.disabled = false;
             } catch (err) {
                 alert(`Pull failed: ${err.message}`);
-                pullBtn.textContent = 'Pull from Planner';
+                pullBtn.textContent = '🔄 Pull from Planner';
                 pullBtn.disabled = false;
             }
         });
 
-        const pushBtn = document.createElement('button');
-        pushBtn.textContent = 'Push to Planner';
-        pushBtn.style.cssText = `
-            padding: 8px 12px;
-            background: #107c10;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-        `;
-        pushBtn.addEventListener('click', async () => {
-            try {
-                pushBtn.disabled = true;
-                pushBtn.textContent = 'Pushing...';
-                const summary = await syncProjectToPlanner(project, planId);
-                syncTime.textContent = `Last sync: ${new Date().toLocaleTimeString()} (${summary.updated} updated, ${summary.created} created)`;
-                pushBtn.textContent = 'Push to Planner';
-                pushBtn.disabled = false;
-            } catch (err) {
-                alert(`Push failed: ${err.message}`);
-                pushBtn.textContent = 'Push to Planner';
-                pushBtn.disabled = false;
-            }
-        });
-
+        // ── Auto-pull toggle ──
         const autoSyncLabel = document.createElement('label');
-        autoSyncLabel.style.cssText = 'display: flex; align-items: center; gap: 8px; cursor: pointer;';
+        autoSyncLabel.style.cssText = 'display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px;';
 
         const autoSyncCheckbox = document.createElement('input');
         autoSyncCheckbox.type = 'checkbox';
@@ -1197,20 +1159,21 @@ import * as msal from '@azure/msal-browser';
         autoSyncCheckbox.addEventListener('change', (e) => {
             if (e.target.checked) {
                 startAutoSync(project, planId, 60000);
-                autoSyncLabel.textContent = 'Auto-Sync: ON';
-                autoSyncLabel.style.cssText = 'display: flex; align-items: center; gap: 8px; cursor: pointer; color: #107c10; font-weight: 500;';
+                autoSyncLabel.style.color = '#4ade80';
+                autoSyncLabel.querySelector('span').textContent = 'Auto-Pull: ON (every 60s)';
             } else {
                 stopAutoSync();
-                autoSyncLabel.textContent = 'Auto-Sync: OFF';
-                autoSyncLabel.style.cssText = 'display: flex; align-items: center; gap: 8px; cursor: pointer;';
+                autoSyncLabel.style.color = '';
+                autoSyncLabel.querySelector('span').textContent = 'Auto-Pull: OFF';
             }
         });
 
+        const autoSyncText = document.createElement('span');
+        autoSyncText.textContent = 'Auto-Pull: OFF';
         autoSyncLabel.appendChild(autoSyncCheckbox);
-        autoSyncLabel.appendChild(document.createTextNode('Auto-Sync: OFF'));
+        autoSyncLabel.appendChild(autoSyncText);
 
         buttonGroup.appendChild(pullBtn);
-        buttonGroup.appendChild(pushBtn);
         buttonGroup.appendChild(autoSyncLabel);
         panel.appendChild(buttonGroup);
 
