@@ -124,7 +124,9 @@
     /**
      * Make HTTP request to Dataverse API
      */
-    async function _callDataverse(method, entity, query = '', body = null) {
+    const MAX_RETRIES = 5; // P0 #25: prevent infinite retry loop
+
+    async function _callDataverse(method, entity, query = '', body = null, _retryCount = 0) {
         if (!config || config.mode !== MODES.OPERATIONS) {
             throw new Error('Dataverse API called in non-Operations mode');
         }
@@ -151,10 +153,15 @@
         try {
             const response = await fetch(url, options);
 
-            // Handle rate limiting
+            // Handle rate limiting with retry cap (P0 #25)
             if (response.status === 429) {
-                await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
-                return _callDataverse(method, entity, query, body);
+                if (_retryCount >= MAX_RETRIES) {
+                    throw new Error(`Dataverse rate limit exceeded after ${MAX_RETRIES} retries`);
+                }
+                const delay = Math.min(32000, RATE_LIMIT_DELAY * Math.pow(2, _retryCount));
+                console.warn(`[D365] Rate limited, retry ${_retryCount + 1}/${MAX_RETRIES} in ${delay}ms`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return _callDataverse(method, entity, query, body, _retryCount + 1);
             }
 
             if (!response.ok) {
@@ -173,7 +180,7 @@
     /**
      * Make HTTP request to Finance & Operations OData API
      */
-    async function _callFO(method, entity, query = '', body = null) {
+    async function _callFO(method, entity, query = '', body = null, _retryCount = 0) {
         if (!config || config.mode !== MODES.FINANCE) {
             throw new Error('F&O API called in non-Finance mode');
         }
@@ -200,10 +207,15 @@
         try {
             const response = await fetch(url, options);
 
-            // Handle rate limiting
+            // Handle rate limiting with retry cap (P0 #25)
             if (response.status === 429) {
-                await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
-                return _callFO(method, entity, query, body);
+                if (_retryCount >= MAX_RETRIES) {
+                    throw new Error(`F&O rate limit exceeded after ${MAX_RETRIES} retries`);
+                }
+                const delay = Math.min(32000, RATE_LIMIT_DELAY * Math.pow(2, _retryCount));
+                console.warn(`[D365] F&O rate limited, retry ${_retryCount + 1}/${MAX_RETRIES} in ${delay}ms`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return _callFO(method, entity, query, body, _retryCount + 1);
             }
 
             if (!response.ok) {

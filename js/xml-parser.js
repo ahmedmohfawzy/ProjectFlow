@@ -15,6 +15,14 @@
      * @returns {object} Parsed project data
      */
     function parse(xmlString) {
+        // Strip UTF-8 BOM (P2.13 fix)
+        xmlString = xmlString.replace(/^\ufeff/, '');
+
+        // XXE Protection: block DTD and external entities (P0 #1)
+        if (/<!DOCTYPE/i.test(xmlString) || /<!ENTITY/i.test(xmlString)) {
+            throw new Error('Unsafe XML: DTD/entity declarations are not allowed for security reasons.');
+        }
+
         const parser = new DOMParser();
         const doc = parser.parseFromString(xmlString, 'text/xml');
 

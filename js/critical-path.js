@@ -111,7 +111,7 @@
             }
 
             task._es = Math.max(0, es);
-            task._ef = task._es + (task.durationDays || 0);
+            task._ef = task._es + Math.max(0, task.durationDays || 0); // Guard negative duration (P0 #14)
         });
 
         // ─── Backward Pass (compute LS, LF) ───

@@ -14,6 +14,13 @@
 
     const MS_PER_DAY = 86400000;
 
+    /** Safe date parser — returns fallback instead of Invalid Date (P0 #8) */
+    function safeDate(s, fallback = new Date()) {
+        if (!s) return new Date(fallback);
+        const d = new Date(s);
+        return isNaN(d.getTime()) ? new Date(fallback) : d;
+    }
+
     /**
      * Compute EVM metrics for a project
      * @param {Object} project - The project data
@@ -25,8 +32,8 @@
         if (tasks.length === 0) return null;
 
         const today = new Date(); today.setHours(0, 0, 0, 0);
-        const pStart = new Date(project.startDate);
-        const pFinish = new Date(project.finishDate);
+        const pStart = safeDate(project.startDate, today);
+        const pFinish = safeDate(project.finishDate, pStart);
 
         // BAC: Budget at Completion (total planned cost)
         const BAC = tasks.reduce((s, t) => s + (t.cost || 0), 0);
@@ -90,7 +97,10 @@
 
         // ── Forecasts ──
         const effectiveBAC = useCostWeight ? BAC : 100;
-        const EAC = CPI > 0 ? effectiveBAC / CPI : effectiveBAC;   // Estimate at Completion
+        // P1 #9: Use independent EAC formula — more accurate when CPI is volatile
+        const EAC = CPI > 0
+            ? AC + ((effectiveBAC - EV) / CPI)  // independent formula
+            : (EV > 0 ? effectiveBAC : Infinity);              // Estimate at Completion
         const ETC = Math.max(0, EAC - AC);                          // Estimate to Complete
         const VAC = effectiveBAC - EAC;                              // Variance at Completion
         const TCPI = (effectiveBAC - AC) === 0 

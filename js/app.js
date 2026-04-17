@@ -5279,7 +5279,7 @@ import { TeamsBridge } from './teams-bridge.js';
         if (!project) return;
         try {
             // Strip attachments for size, then encode
-            const slim = JSON.parse(JSON.stringify(project));
+            const slim = structuredClone(project); // P0 #4: native clone, 2-3x faster
             (slim.tasks || []).forEach(t => { delete t.attachments; });
             const json = JSON.stringify(slim);
             const encoded = btoa(encodeURIComponent(json));
@@ -5347,7 +5347,7 @@ import { TeamsBridge } from './teams-bridge.js';
         ScenariosManager.renderScenariosPanel(container, project, {
             onLoad: (snapshot) => {
                 if (!confirm('Load this scenario? Unsaved changes will be lost.')) return;
-                const loaded = JSON.parse(JSON.stringify(snapshot));
+                const loaded = structuredClone(snapshot); // P0 #4: native clone
                 (loaded.tasks || []).forEach(t => { t.start = new Date(t.start); t.finish = new Date(t.finish); t.isExpanded = true; t.isVisible = true; });
                 if (loaded.startDate)  loaded.startDate  = new Date(loaded.startDate);
                 if (loaded.finishDate) loaded.finishDate = new Date(loaded.finishDate);
@@ -5627,11 +5627,55 @@ import { TeamsBridge } from './teams-bridge.js';
             // Already connected with active project — show sync panel
             MSGraphClient.renderSyncPanel(body, project, _plannerConnectedPlanId);
         } else {
-            // Show setup wizard — always allow connecting and importing
-            MSGraphClient.renderSetupWizard(body, async ({ planId, planTitle }) => {
+            // Show setup wizard — single plan OR multi-plan portfolio
+            MSGraphClient.renderSetupWizard(body, async ({ planId, planTitle, planIds, planTitles, isPortfolioImport }) => {
+
+                // ── MULTI-PLAN: import each plan, save to portfolio, open portfolio view ──
+                if (isPortfolioImport && planIds && planIds.length > 1) {
+                    toggleModal('modalPlannerSync', false);
+                    showToast('info', `📊 Importing ${planIds.length} Planner plans into Portfolio…`);
+                    try {
+                        setStatus(`Importing ${planIds.length} plans…`);
+                        let saved = 0, failed = 0;
+                        const results = await MSGraphClient.importMultiplePlans(planIds, (done, total) => {
+                            setStatus(`Importing plan ${done} of ${total}…`);
+                        });
+                        for (const r of results) {
+                            if (!r.success) { failed++; continue; }
+                            const proj = r.project;
+                            // Normalise dates
+                            (proj.tasks || []).forEach(t => {
+                                if (t.start  && !(t.start  instanceof Date)) t.start  = new Date(t.start);
+                                if (t.finish && !(t.finish instanceof Date)) t.finish = new Date(t.finish);
+                                t.isExpanded = true; t.isVisible = true;
+                                if (!t.predecessors)  t.predecessors  = [];
+                                if (!t.resourceNames) t.resourceNames = [];
+                            });
+                            if (proj.startDate  && !(proj.startDate  instanceof Date)) proj.startDate  = new Date(proj.startDate);
+                            if (proj.finishDate && !(proj.finishDate instanceof Date)) proj.finishDate = new Date(proj.finishDate);
+                            const id = ProjectStore.generateId();
+                            await ProjectStore.save(id, proj);
+                            await ProjectStore.addToIndex(id, proj); // register in portfolio index
+                            saved++;
+                        }
+                        const msg = failed > 0
+                            ? `Portfolio updated: ${saved} plans saved, ${failed} failed`
+                            : `✅ ${saved} plans imported to Portfolio`;
+                        showToast(failed > 0 ? 'warning' : 'success', msg);
+                        // Switch to portfolio tab
+                        els.welcomeScreen.classList.add('hidden');
+                        els.workspace.classList.remove('hidden');
+                        setView('portfolio');
+                        renderPortfolioView();
+                    } catch(e) {
+                        showToast('error', 'Portfolio import failed: ' + e.message);
+                    } finally { setStatus('Ready'); }
+                    return;
+                }
+
+                // ── SINGLE-PLAN: original behavior — open as active project ──
                 _plannerConnectedPlanId = planId;
                 showToast('info', `Connected to Planner: "${planTitle}". Importing...`);
-                // Always import the plan as a new project
                 try {
                     setStatus('Importing from MS Planner…');
                     const imported = await MSGraphClient.importPlan(planId);

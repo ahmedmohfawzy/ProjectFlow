@@ -42,7 +42,7 @@
   function cloneTask(task) {
     if (!task) return null;
 
-    const cloned = JSON.parse(JSON.stringify(task));
+    const cloned = structuredClone(task); // P0 #4: native clone
     cloned.uid = generateUID();
     cloned.name = (task.name || 'Task') + ' (Copy)';
 

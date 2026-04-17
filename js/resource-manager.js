@@ -117,7 +117,8 @@
         const start = new Date(projectStart);
         const end = new Date(projectEnd);
 
-        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        // P1 #11: Use constant ms increment to avoid DST infinite loop
+        for (let d = new Date(start); d.getTime() <= end.getTime(); d = new Date(d.getTime() + 86400000)) {
             if (d.getDay() === 0 || d.getDay() === 6) continue;
             const key = d.toISOString().split('T')[0];
             data.push({
