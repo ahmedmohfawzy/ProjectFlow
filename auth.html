@@ -4,93 +4,192 @@
     <meta charset="UTF-8">
     <title>ProjectFlow — Sign In</title>
     <style>
-        body { margin:0; display:flex; align-items:center; justify-content:center; height:100vh;
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { display:flex; align-items:center; justify-content:center; height:100vh;
                background:#1e1e2e; color:#e2e8f0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-        .msg { text-align:center; font-size:14px; }
-        .spinner { display:inline-block; width:24px; height:24px; border:3px solid rgba(255,255,255,0.2);
-                   border-top:3px solid #6366f1; border-radius:50%; animation:spin 0.8s linear infinite; margin-bottom:12px; }
+        .card { text-align:center; padding:32px; max-width:400px; width:100%; }
+        .card h2 { font-size:1.2rem; margin-bottom:6px; }
+        .card p { font-size:0.82rem; color:#94a3b8; margin-bottom:20px; line-height:1.5; }
+        .sign-in-btn {
+            width:100%; padding:14px 20px; border:none; border-radius:8px;
+            background:linear-gradient(135deg,#0078d4,#106ebe); color:white;
+            font-size:15px; font-weight:600; cursor:pointer; transition:all 0.2s;
+            display:flex; align-items:center; justify-content:center; gap:10px;
+        }
+        .sign-in-btn:hover { transform:translateY(-2px); box-shadow:0 4px 12px rgba(0,120,212,0.4); }
+        .sign-in-btn:disabled { opacity:0.6; cursor:not-allowed; transform:none; box-shadow:none; }
+        .status { margin-top:14px; padding:10px; border-radius:8px; font-size:13px; display:none; }
+        .status.info { display:block; background:rgba(59,130,246,0.15); color:#60a5fa; }
+        .status.success { display:block; background:rgba(34,197,94,0.15); color:#4ade80; }
+        .status.error { display:block; background:rgba(239,68,68,0.15); color:#f87171; }
+        .spinner { display:inline-block; width:16px; height:16px; border:2px solid rgba(255,255,255,0.3);
+                   border-top:2px solid white; border-radius:50%; animation:spin 0.7s linear infinite; }
         @keyframes spin { to { transform:rotate(360deg); } }
     </style>
 </head>
 <body>
-<div class="msg">
-    <div class="spinner"></div>
-    <p id="status">Signing in with Microsoft…</p>
+<div class="card">
+    <div style="font-size:2.2rem;margin-bottom:12px;">📋</div>
+    <h2>Connect to Microsoft Planner</h2>
+    <p>Click the button below to sign in with your Microsoft account.</p>
+
+    <button id="signInBtn" class="sign-in-btn">
+        <svg viewBox="0 0 21 21" fill="none" width="20" height="20">
+            <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+            <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+            <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+            <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+        </svg>
+        Sign in with Microsoft
+    </button>
+
+    <div id="status" class="status"></div>
 </div>
 
 <script src="https://res.cdn.office.net/teams-js/2.24.0/js/MicrosoftTeams.min.js"></script>
 <script type="module">
 import * as msal from '@azure/msal-browser';
 
-(async function () {
-    const CLIENT_ID = '5c5eccbf-b7fb-4041-b969-44da0d6cf406';
-    const AUTHORITY = 'https://login.microsoftonline.com/organizations';
-    const SCOPES    = ['Tasks.ReadWrite', 'Group.Read.All', 'User.Read', 'User.ReadBasic.All', 'offline_access'];
+const CLIENT_ID = '5c5eccbf-b7fb-4041-b969-44da0d6cf406';
+const AUTHORITY = 'https://login.microsoftonline.com/organizations';
+const SCOPES    = ['Tasks.ReadWrite', 'Group.Read.All', 'User.Read', 'User.ReadBasic.All', 'offline_access'];
 
-    // Redirect URI = this page itself
-    const REDIRECT_URI = window.location.origin + window.location.pathname;
+const statusEl = document.getElementById('status');
+const signInBtn = document.getElementById('signInBtn');
 
-    const statusEl = document.getElementById('status');
+function showStatus(msg, type) {
+    statusEl.textContent = msg;
+    statusEl.className = 'status ' + type;
+}
+
+let msalApp = null;
+
+// Initialize MSAL on page load
+async function initMsal() {
+    const msalConfig = {
+        auth: {
+            clientId: CLIENT_ID,
+            authority: AUTHORITY,
+            redirectUri: window.location.origin + window.location.pathname,
+            navigateToLoginRequestUrl: false,
+        },
+        cache: {
+            cacheLocation: 'localStorage',
+            storeAuthStateInCookie: true,
+        },
+        system: { allowNativeBroker: false },
+    };
+    msalApp = new msal.PublicClientApplication(msalConfig);
+    await msalApp.initialize();
+
+    // Check if returning from a redirect (fallback for environments where popup fails)
+    try {
+        const redirectResult = await msalApp.handleRedirectPromise();
+        if (redirectResult && redirectResult.account) {
+            showStatus('✅ Signed in! Closing…', 'success');
+            notifyTeamsSuccess(redirectResult.account);
+            return;
+        }
+    } catch (_) {}
+
+    // Check if already authenticated
+    const accounts = msalApp.getAllAccounts();
+    if (accounts.length > 0) {
+        showStatus('✅ Already signed in! Closing…', 'success');
+        notifyTeamsSuccess(accounts[0]);
+    }
+}
+
+// Notify Teams parent of success
+function notifyTeamsSuccess(account) {
+    const result = JSON.stringify({
+        accountId: account.homeAccountId,
+        username: account.username,
+        name: account.name,
+    });
+    try {
+        microsoftTeams.authentication.notifySuccess(result);
+    } catch (_) {
+        // Not in Teams — close window
+        setTimeout(() => window.close(), 500);
+    }
+}
+
+// Notify Teams parent of failure
+function notifyTeamsFailure(msg) {
+    try {
+        microsoftTeams.authentication.notifyFailure(msg);
+    } catch (_) {}
+}
+
+// Sign in — triggered by user click (important: popup must be user-initiated)
+signInBtn.addEventListener('click', async () => {
+    if (!msalApp) {
+        showStatus('⏳ Initializing…', 'info');
+        await initMsal();
+        if (msalApp.getAllAccounts().length > 0) return; // already done
+    }
+
+    signInBtn.disabled = true;
+    signInBtn.innerHTML = '<span class="spinner"></span> Signing in…';
+    showStatus('⏳ A login window will open. Complete sign-in there.', 'info');
 
     try {
-        // Initialize MSAL (same version as main app — bundled by Vite)
-        const msalConfig = {
-            auth: {
-                clientId: CLIENT_ID,
-                authority: AUTHORITY,
-                redirectUri: REDIRECT_URI,
-                navigateToLoginRequestUrl: false,
-            },
-            cache: {
-                cacheLocation: 'localStorage',
-                storeAuthStateInCookie: true,
-            },
-            system: {
-                allowNativeBroker: false,
-            },
-        };
+        // Use loginPopup — works from a top-level window (Teams auth dialog)
+        // The popup is user-initiated (click handler) so browsers allow it
+        const result = await msalApp.loginPopup({
+            scopes: SCOPES,
+            prompt: 'select_account',
+        });
 
-        const msalApp = new msal.PublicClientApplication(msalConfig);
-        await msalApp.initialize();
-
-        // Check if we're returning from a redirect (Microsoft login callback)
-        const redirectResult = await msalApp.handleRedirectPromise();
-
-        if (redirectResult && redirectResult.account) {
-            // Login successful — notify Teams parent
-            statusEl.textContent = 'Signed in! Closing…';
-
+        if (result && result.account) {
+            showStatus('✅ Signed in successfully!', 'success');
+            notifyTeamsSuccess(result.account);
+        } else {
+            showStatus('⚠️ Sign-in incomplete. Try again.', 'error');
+            resetBtn();
+        }
+    } catch (popupErr) {
+        // If popup blocked, fallback to redirect
+        if (popupErr.message && popupErr.message.includes('popup')) {
+            showStatus('⏳ Redirecting to Microsoft login…', 'info');
             try {
-                await microsoftTeams.app.initialize();
-                microsoftTeams.authentication.notifySuccess(JSON.stringify({
-                    accountId: redirectResult.account.homeAccountId,
-                    username: redirectResult.account.username,
-                    name: redirectResult.account.name,
-                }));
-            } catch (_) {
-                // Not in Teams popup — just close the window
-                window.close();
+                await msalApp.loginRedirect({
+                    scopes: SCOPES,
+                    prompt: 'select_account',
+                });
+            } catch (redirectErr) {
+                showStatus('❌ ' + redirectErr.message, 'error');
+                notifyTeamsFailure(redirectErr.message);
+                resetBtn();
             }
         } else {
-            // First load — initiate the redirect to Microsoft login
-            statusEl.textContent = 'Redirecting to Microsoft login…';
-            await msalApp.loginRedirect({
-                scopes: SCOPES,
-                prompt: 'select_account',
-            });
-        }
-    } catch (err) {
-        statusEl.textContent = '❌ ' + err.message;
-        statusEl.style.color = '#f87171';
-
-        // Notify Teams of failure
-        try {
-            await microsoftTeams.app.initialize();
-            microsoftTeams.authentication.notifyFailure(err.message || 'Login failed');
-        } catch (_) {
-            // Not in Teams — show error
+            showStatus('❌ ' + popupErr.message, 'error');
+            notifyTeamsFailure(popupErr.message);
+            resetBtn();
         }
     }
+});
+
+function resetBtn() {
+    signInBtn.disabled = false;
+    signInBtn.innerHTML = `
+        <svg viewBox="0 0 21 21" fill="none" width="20" height="20">
+            <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+            <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+            <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+            <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+        </svg>
+        Sign in with Microsoft
+    `;
+}
+
+// Init Teams SDK first, then MSAL
+(async () => {
+    try {
+        await microsoftTeams.app.initialize();
+    } catch (_) {}
+    await initMsal();
 })();
 </script>
 </body>
