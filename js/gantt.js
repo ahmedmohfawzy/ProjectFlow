@@ -256,10 +256,14 @@
 
     function drawDependencyLinks() {
         ctx.lineWidth = 1.5;
+        // P1 #20: Pre-build uid→index Map for O(1) lookup instead of O(n) findIndex per link
+        const uidToIdx = new Map();
+        for (let i = 0; i < tasks.length; i++) uidToIdx.set(tasks[i].uid, i);
+
         for (let i = 0; i < tasks.length; i++) {
             const task = tasks[i]; if (!task.predecessors) continue;
             for (const pred of task.predecessors) {
-                const pi = tasks.findIndex(t => t.uid === pred.predecessorUID); if (pi === -1) continue;
+                const pi = uidToIdx.get(pred.predecessorUID); if (pi === undefined) continue;
                 const pt = tasks[pi]; const isCritLink = showCritical && task.critical && pt.critical;
                 ctx.strokeStyle = isCritLink ? 'rgba(239,68,68,0.4)' : CONFIG.colors.link;
 

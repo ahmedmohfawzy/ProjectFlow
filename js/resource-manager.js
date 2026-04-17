@@ -50,8 +50,7 @@
             const dailyHours = ((asgn.units || 1) * 8);
 
             for (let d = 0; d < days; d++) {
-                const date = new Date(start);
-                date.setDate(date.getDate() + d);
+                const date = new Date(start.getTime() + d * 86400000); // P1 #11: constant ms offset
                 // Skip weekends
                 if (date.getDay() === 0 || date.getDay() === 6) continue;
 

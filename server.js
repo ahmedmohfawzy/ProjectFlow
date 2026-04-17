@@ -102,15 +102,30 @@ const rateLimiter = (req, res, next) => {
 };
 
 const app = express();
+
+// P1 #28: Enforce HTTPS in production
+if (process.env.NODE_ENV === 'production') {
+    app.use((req, res, next) => {
+        if (req.headers['x-forwarded-proto'] !== 'https' && !req.secure) {
+            return res.redirect(301, 'https://' + req.headers.host + req.url);
+        }
+        next();
+    });
+}
 app.use(cors({
     origin: function(origin, callback) {
-        if (!origin) return callback(null, true);
+        if (!origin) return callback(null, true); // same-origin / tools
         if (/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|192\.168\.\d+\.\d+)(:\d+)?$/.test(origin)) {
             return callback(null, true);
         }
-        // Fallback for dev: allow but log
-        console.warn('CORS allowed origin dynamically:', origin);
-        callback(null, true); 
+        // P1 #27: Block unknown origins in production
+        if (process.env.NODE_ENV === 'production') {
+            console.warn('CORS blocked origin:', origin);
+            return callback(new Error('CORS not allowed'), false);
+        }
+        // Dev fallback: allow but log warning
+        console.warn('CORS allowed origin (dev only):', origin);
+        callback(null, true);
     }
 }));
 app.use(express.json({ limit: '50mb' }));

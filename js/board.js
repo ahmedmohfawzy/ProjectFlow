@@ -117,7 +117,7 @@
         if (task.status === 'late') card.classList.add('board-card-late');
 
         const pct = task.percentComplete || 0;
-        const tags = (task.tags || []).map(t => `<span class="board-tag">${t}</span>`).join('');
+        const tags = (task.tags || []).map(t => `<span class="board-tag">${_esc(t)}</span>`).join(''); // P0 #5: escape tags
         const res  = (task.resourceNames || []).join(', ');
         const due  = task.finish ? _fmtDate(task.finish) : '';
         const isLate = task.status === 'late';

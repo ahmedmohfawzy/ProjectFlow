@@ -894,6 +894,12 @@ import { TeamsBridge } from './teams-bridge.js';
 
     function handlePlannerFileSelected(e) {
         const file = e.target.files[0]; if (!file) return;
+        // P1 #29: Reject files > 50MB to prevent DoS
+        if (file.size > 50 * 1024 * 1024) {
+            showToast('error', `File too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Maximum is 50MB.`);
+            els.filePlannerInput.value = '';
+            return;
+        }
         setStatus('Parsing Planner Excel…');
         
         PlannerParser.parse(file)
@@ -933,6 +939,13 @@ import { TeamsBridge } from './teams-bridge.js';
     // ══════ FILE IMPORT (XML) ══════
     function handleFileImport(e) {
         const file = e.target.files[0]; if (!file) return;
+        // P1 #29: Reject files > 50MB to prevent DoS
+        const MAX_FILE_SIZE = 50 * 1024 * 1024;
+        if (file.size > MAX_FILE_SIZE) {
+            showToast('error', `File too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Maximum is 50MB.`);
+            els.fileInput.value = '';
+            return;
+        }
         setStatus('Importing…');
         const reader = new FileReader();
         reader.onload = (ev) => {
@@ -1792,7 +1805,7 @@ import { TeamsBridge } from './teams-bridge.js';
     }
 
     // ══════ UNDO/REDO ══════
-    function saveUndoState() { if (!project) return; undoStack.push(JSON.stringify(project)); if (undoStack.length > MAX_UNDO) undoStack.shift(); redoStack = []; updateUndoButtons(); }
+    function saveUndoState() { if (!project) return; undoStack.push(structuredClone(project)); if (undoStack.length > MAX_UNDO) undoStack.shift(); redoStack = []; updateUndoButtons(); }
 
     // Centralized mutation wrapper — ensures undo state is always saved before changes (TD-04)
     // B.4: Also invalidates analytics cache so next recalculate() recomputes fresh
@@ -1805,10 +1818,10 @@ import { TeamsBridge } from './teams-bridge.js';
         autoSave();
         EventBus.emit('project:changed', { project, source: 'mutation' });
     }
-    function handleUndo() { if (!undoStack.length) return; redoStack.push(JSON.stringify(project)); restoreProject(undoStack.pop()); }
-    function handleRedo() { if (!redoStack.length) return; undoStack.push(JSON.stringify(project)); restoreProject(redoStack.pop()); }
-    function restoreProject(json) {
-        project = JSON.parse(json);
+    function handleUndo() { if (!undoStack.length) return; redoStack.push(structuredClone(project)); restoreProject(undoStack.pop()); }
+    function handleRedo() { if (!redoStack.length) return; undoStack.push(structuredClone(project)); restoreProject(redoStack.pop()); }
+    function restoreProject(snap) {
+        project = snap;
         project.tasks.forEach(t => { t.start = new Date(t.start); t.finish = new Date(t.finish); if (t.baselineStart) t.baselineStart = new Date(t.baselineStart); if (t.baselineFinish) t.baselineFinish = new Date(t.baselineFinish); });
         if (project.startDate) project.startDate = new Date(project.startDate);
         if (project.finishDate) project.finishDate = new Date(project.finishDate);

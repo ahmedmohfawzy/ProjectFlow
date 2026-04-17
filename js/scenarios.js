@@ -14,14 +14,13 @@
    * @returns {Object} Cloned object without attachment blobs
    */
   function deepCloneWithoutAttachments(obj) {
-    const serialized = JSON.stringify(obj, (key, value) => {
-      // Strip attachment data to keep localStorage size small
-      if (key === 'attachments' && Array.isArray(value)) {
-        return [];
-      }
-      return value;
-    });
-    return JSON.parse(serialized);
+    // P0 #4: use native structuredClone instead of JSON round-trip
+    const clone = structuredClone(obj);
+    // Strip attachment blobs to keep localStorage size small
+    if (clone.tasks && Array.isArray(clone.tasks)) {
+      clone.tasks.forEach(t => { if (t.attachments) t.attachments = []; });
+    }
+    return clone;
   }
 
   /**
@@ -50,6 +49,15 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify(toKeep));
     } catch (e) {
       console.error('Error saving scenarios to localStorage:', e);
+      // P0 #6: Notify user on quota exceeded instead of silent failure
+      if (e.name === 'QuotaExceededError' || e.code === 22) {
+        if (typeof window !== 'undefined' && window.PF && window.PF.showToast) {
+          window.PF.showToast('warning', 'Storage full — oldest scenarios removed to free space.');
+        }
+        // Try evicting oldest scenario and retry
+        const reduced = scenarios.slice(0, Math.max(1, scenarios.length - 2));
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(reduced)); } catch(_) {}
+      }
     }
   }
 

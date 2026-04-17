@@ -126,7 +126,7 @@
             const succs = successors.get(task.uid);
             if (!succs || succs.length === 0) {
                 task._lf = projectEnd;
-                task._ls = task._lf - (task.durationDays || 0);
+                task._ls = task._lf - Math.max(0, task.durationDays || 0); // Guard negative duration
             } else {
                 let lf = Infinity;
                 succs.forEach(succ => {
@@ -147,7 +147,7 @@
                     if (isFinite(val)) lf = Math.min(lf, val);
                 });
                 task._lf = isFinite(lf) ? lf : projectEnd;
-                task._ls = task._lf - (task.durationDays || 0);
+                task._ls = task._lf - Math.max(0, task.durationDays || 0); // Guard negative duration
             }
         }
 
