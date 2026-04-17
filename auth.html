@@ -3,8 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>ProjectFlow — Sign In</title>
-    <script src="https://alcdn.msauth.net/browser/5.6.0/js/msal-browser.min.js"></script>
-    <script src="https://res.cdn.office.net/teams-js/2.24.0/js/MicrosoftTeams.min.js"></script>
     <style>
         body { margin:0; display:flex; align-items:center; justify-content:center; height:100vh;
                background:#1e1e2e; color:#e2e8f0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -20,7 +18,10 @@
     <p id="status">Signing in with Microsoft…</p>
 </div>
 
-<script>
+<script src="https://res.cdn.office.net/teams-js/2.24.0/js/MicrosoftTeams.min.js"></script>
+<script type="module">
+import * as msal from '@azure/msal-browser';
+
 (async function () {
     const CLIENT_ID = '5c5eccbf-b7fb-4041-b969-44da0d6cf406';
     const AUTHORITY = 'https://login.microsoftonline.com/organizations';
@@ -32,7 +33,7 @@
     const statusEl = document.getElementById('status');
 
     try {
-        // Initialize MSAL
+        // Initialize MSAL (same version as main app — bundled by Vite)
         const msalConfig = {
             auth: {
                 clientId: CLIENT_ID,
@@ -56,7 +57,7 @@
         const redirectResult = await msalApp.handleRedirectPromise();
 
         if (redirectResult && redirectResult.account) {
-            // ✅ Login successful — notify Teams parent
+            // Login successful — notify Teams parent
             statusEl.textContent = 'Signed in! Closing…';
 
             try {
