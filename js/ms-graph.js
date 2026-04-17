@@ -320,11 +320,13 @@ import * as msal from '@azure/msal-browser';
 
     async function getPlanDetails(planId) {
         try {
-            // Fetch plan metadata, ALL buckets, and ALL tasks (with pagination)
-            const [planData, allBuckets, allTasks] = await Promise.all([
+            // Fetch plan metadata, plan details (labels), ALL buckets, and ALL tasks
+            // Use $top=999 to minimize pagination round-trips for large projects
+            const [planData, planDetailsData, allBuckets, allTasks] = await Promise.all([
                 _call('GET', `/planner/plans/${planId}`),
-                _fetchAllPages(`/planner/plans/${planId}/buckets`),
-                _fetchAllPages(`/planner/plans/${planId}/tasks`),
+                _call('GET', `/planner/plans/${planId}/details`).catch(() => ({})),
+                _fetchAllPages(`/planner/plans/${planId}/buckets?$top=100`),
+                _fetchAllPages(`/planner/plans/${planId}/tasks?$top=999`),
             ]);
 
             const buckets = allBuckets.map(b => ({
@@ -332,6 +334,10 @@ import * as msal from '@azure/msal-browser';
                 name:      b.name,
                 orderHint: b.orderHint,
             }));
+
+            // Category descriptions map: { category1: "Design", category2: "Dev", ... }
+            // Empty string means no label was set for that category slot
+            const categoryDescriptions = planDetailsData.categoryDescriptions || {};
 
             return {
                 plan: {
@@ -342,6 +348,7 @@ import * as msal from '@azure/msal-browser';
                 },
                 buckets,
                 tasks: allTasks,
+                categoryDescriptions,
             };
         } catch (err) {
             throw new Error(`getPlanDetails failed: ${err.message}`);
@@ -363,32 +370,66 @@ import * as msal from '@azure/msal-browser';
     const _userCache = new Map(); // userId → displayName
 
     /**
-     * Resolve an array of user IDs to display names via Graph API.
+     * Graph $batch helper — bundles up to 20 sub-requests into one HTTP call.
+     * Each request: { id, method, url }
+     * Returns: array of { id, status, body } in same order as requests.
+     */
+    async function _batchCall(requests) {
+        const token = await _getAccessToken();
+        const response = await fetch(`${GRAPH_ENDPOINT}/$batch`, {
+            method:  'POST',
+            headers: {
+                Authorization:  `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ requests }),
+            signal: AbortSignal.timeout(30000),
+        });
+        if (!response.ok) {
+            const errText = await response.text().catch(() => response.statusText);
+            throw new Error(`Graph $batch error ${response.status}: ${errText}`);
+        }
+        const result = await response.json();
+        // Return responses sorted by id so callers can zip with original requests
+        const map = Object.fromEntries((result.responses || []).map(r => [r.id, r]));
+        return requests.map(req => map[req.id] || { id: req.id, status: 500, body: null });
+    }
+
+    /**
+     * Resolve an array of user IDs to display names via Graph $batch.
+     * Bundles 20 /users/{id} lookups per HTTP call instead of N individual calls.
      * Results are cached to avoid duplicate requests.
      */
     async function _resolveUserDisplayNames(userIds) {
         const missing = userIds.filter(id => id && !_userCache.has(id));
         if (missing.length > 0) {
-            const BATCH = 15;
-            for (let i = 0; i < missing.length; i += BATCH) {
-                const batch = missing.slice(i, i + BATCH);
-                const results = await Promise.allSettled(
-                    batch.map(id =>
-                        _call('GET', `/users/${id}?$select=displayName,userPrincipalName,mail`)
-                    )
-                );
-                results.forEach((r, idx) => {
-                    const id = batch[idx];
-                    if (r.status === 'fulfilled' && r.value) {
-                        const v = r.value;
-                        // Use best available name: displayName → first part of UPN → mail prefix
+            const BATCH_SIZE = 20; // Graph $batch limit
+            for (let i = 0; i < missing.length; i += BATCH_SIZE) {
+                const chunk = missing.slice(i, i + BATCH_SIZE);
+                const requests = chunk.map((id, idx) => ({
+                    id:     String(idx),
+                    method: 'GET',
+                    url:    `/users/${id}?$select=displayName,userPrincipalName,mail`,
+                }));
+                let responses;
+                try {
+                    responses = await _batchCall(requests);
+                } catch (batchErr) {
+                    // $batch failed (e.g. no permission) — fall back to empty names
+                    console.warn('[MSGraph] $batch user lookup failed:', batchErr.message);
+                    chunk.forEach(id => _userCache.set(id, id.substring(0, 8) + '…'));
+                    continue;
+                }
+                responses.forEach((resp, idx) => {
+                    const id = chunk[idx];
+                    if (resp.status === 200 && resp.body) {
+                        const v = resp.body;
                         const name = v.displayName
                             || (v.userPrincipalName ? v.userPrincipalName.split('@')[0] : null)
                             || (v.mail ? v.mail.split('@')[0] : null)
                             || id.substring(0, 8) + '…';
                         _userCache.set(id, name);
                     } else {
-                        // Permission denied or not found — keep UUID short form
                         _userCache.set(id, id.substring(0, 8) + '…');
                     }
                 });
@@ -398,8 +439,23 @@ import * as msal from '@azure/msal-browser';
     }
 
     // ============================================================================
+    // PLAN-LEVEL CACHE  (avoids redundant API calls on each auto-pull)
+    // ============================================================================
+
+    /**
+     * Per-plan cache: categoryDescriptions + resolved member name map.
+     * Keyed by planId. Populated on first importPlan; reused by every subsequent pull.
+     * TTL: cleared when importPlan is called again for the same plan.
+     */
+    const _planCache = new Map();
+    // planId → { categoryDescriptions: {…}, userIdToName: {…} }
+
+    // ============================================================================
     // MAPPING: PLANNER → PROJECTFLOW
     // ============================================================================
+
+    // Planner priority numbers → human-readable labels
+    const PRIORITY_LABELS = { 0: 'Urgent', 1: 'Important', 2: 'Medium', 9: 'Low' };
 
     /**
      * Convert Planner plan data to a ProjectFlow project with a FLAT task list.
@@ -409,10 +465,11 @@ import * as msal from '@azure/msal-browser';
      * @param {Object} plan
      * @param {Array}  buckets
      * @param {Array}  tasks
-     * @param {Object} taskDetailsMap   taskId → details object
-     * @param {Object} userIdToName     userId  → displayName (pre-resolved)
+     * @param {Object} taskDetailsMap       taskId → details object
+     * @param {Object} userIdToName         userId  → displayName (pre-resolved)
+     * @param {Object} categoryDescriptions { category1: "Label Name", ... } from plan details
      */
-    function plannerToProject(plan, buckets, tasks, taskDetailsMap, userIdToName = {}) {
+    function plannerToProject(plan, buckets, tasks, taskDetailsMap, userIdToName = {}, categoryDescriptions = {}) {
         const project = {
             id: plan.id,
             name: plan.title,
@@ -519,19 +576,41 @@ import * as msal from '@azure/msal-browser';
                     });
                 }
 
-                // Map appliedCategories → tags
+                // Map appliedCategories → real label names from categoryDescriptions
+                // Falls back to raw key (e.g. "category1") only if no label was defined
                 const tags = [];
                 if (task.appliedCategories && typeof task.appliedCategories === 'object') {
                     Object.keys(task.appliedCategories).forEach(key => {
-                        if (task.appliedCategories[key] === true) tags.push(key);
+                        if (task.appliedCategories[key] === true) {
+                            const labelName = categoryDescriptions[key];
+                            tags.push(labelName && labelName.trim() ? labelName.trim() : key);
+                        }
                     });
                 }
 
-                // Build notes = description + checklist
+                // Priority: 0=Urgent 1=Important 2=Medium 9=Low
+                const priorityNum   = typeof task.priority === 'number' ? task.priority : null;
+                const priorityLabel = priorityNum !== null
+                    ? (PRIORITY_LABELS[priorityNum] || 'Medium')
+                    : null;
+
+                // Compute % complete from checklist when available (granular 0-100)
+                // Falls back to Planner's coarse 0/50/100 value
+                let pct = task.percentComplete || 0;
+                if (details.checklist) {
+                    const checkItems = Object.values(details.checklist);
+                    if (checkItems.length > 0) {
+                        const checked = checkItems.filter(i => i.isChecked).length;
+                        pct = Math.round((checked / checkItems.length) * 100);
+                    }
+                }
+
+                // Build notes = description + checklist items
                 let notes = details.description || '';
                 if (details.checklist && Object.keys(details.checklist).length > 0) {
                     const checklistItems = Object.values(details.checklist)
-                        .map(item => `- ${item.title}${item.isChecked ? ' ✓' : ''}`)
+                        .sort((a, b) => (a.orderHint || '').localeCompare(b.orderHint || ''))
+                        .map(item => `- ${item.isChecked ? '✓' : '○'} ${item.title}`)
                         .join('\n');
                     notes = notes
                         ? `${notes}\n\nChecklist:\n${checklistItems}`
@@ -550,7 +629,9 @@ import * as msal from '@azure/msal-browser';
                     start:          startDate,
                     finish:         finishDate,
                     durationDays:   dur,
-                    percentComplete: task.percentComplete || 0,
+                    percentComplete: pct,
+                    priority:       priorityLabel,   // 'Urgent' | 'Important' | 'Medium' | 'Low' | null
+                    priorityNum:    priorityNum,     // raw 0/1/2/9 for sorting
                     resourceNames,
                     tags,
                     notes,
@@ -637,66 +718,123 @@ import * as msal from '@azure/msal-browser';
 
     async function importPlan(planId) {
         try {
-            const { plan, buckets, tasks } = await getPlanDetails(planId);
+            const { plan, buckets, tasks, categoryDescriptions } = await getPlanDetails(planId);
 
-            // Fetch ALL task details in parallel (much faster than sequential)
-            const BATCH = 10; // max concurrent requests
+            // ── Fetch ALL task details via $batch (20 per HTTP call, much faster than N individual calls) ──
+            // Run batch groups in parallel (5 concurrent) for large projects
             const taskDetailsMap = {};
+            const BATCH_SIZE = 20;
+            const PARALLEL_BATCHES = 5; // 5 × 20 = 100 tasks per wave
+            const allChunks = [];
+            for (let i = 0; i < tasks.length; i += BATCH_SIZE) {
+                allChunks.push(tasks.slice(i, i + BATCH_SIZE));
+            }
 
-            for (let i = 0; i < tasks.length; i += BATCH) {
-                const batch = tasks.slice(i, i + BATCH);
-                const results = await Promise.allSettled(
-                    batch.map(t => getPlanTaskDetails(t.id))
+            for (let w = 0; w < allChunks.length; w += PARALLEL_BATCHES) {
+                const wave = allChunks.slice(w, w + PARALLEL_BATCHES);
+                const waveResults = await Promise.allSettled(
+                    wave.map(chunk => {
+                        const requests = chunk.map((t, idx) => ({
+                            id:     String(idx),
+                            method: 'GET',
+                            url:    `/planner/tasks/${t.id}/details`,
+                        }));
+                        return _batchCall(requests).then(responses => ({ chunk, responses }));
+                    })
                 );
-                results.forEach((r, idx) => {
-                    const id = batch[idx].id;
-                    taskDetailsMap[id] = r.status === 'fulfilled' ? r.value : {};
+                waveResults.forEach(result => {
+                    if (result.status === 'fulfilled') {
+                        const { chunk, responses } = result.value;
+                        responses.forEach((resp, idx) => {
+                            taskDetailsMap[chunk[idx].id] = resp.status === 200 && resp.body ? resp.body : {};
+                        });
+                    } else {
+                        // Fallback: mark as empty
+                        console.warn('[MSGraph] Batch wave failed:', result.reason?.message);
+                    }
                 });
             }
 
-            // ── Strategy 1: Fetch group members (uses Group.Read.All — always works) ──
-            // The plan.owner is the Microsoft 365 Group ID that owns the plan.
-            // Group members always have displayName and are the source of truth for assignments.
-            const userIdToName = {};
-            if (plan.owner) {
-                try {
-                    const members = await _fetchAllPages(
-                        `/groups/${plan.owner}/members?$select=id,displayName,userPrincipalName&$top=100`
-                    );
-                    members.forEach(m => {
-                        if (m.id && (m.displayName || m.userPrincipalName)) {
-                            const name = m.displayName || m.userPrincipalName.split('@')[0];
-                            userIdToName[m.id] = name;
-                            _userCache.set(m.id, name); // cache for merge/sync use
-                        }
-                    });
-                } catch (e) {
-                    console.warn('[MSGraph] Could not fetch group members:', e.message);
-                }
-            }
+            // ── Resolve user display names (cached per plan) ──
+            // Strategy 1: group members (Group.Read.All — always works)
+            // Strategy 2: $batch /users/{id} fallback for any remaining IDs
+            let userIdToName = {};
 
-            // ── Strategy 2: Fallback — try /users/{id} for any still-unresolved IDs ──
-            const allUserIds = new Set();
-            tasks.forEach(task => {
-                if (task.assignments && typeof task.assignments === 'object') {
-                    Object.keys(task.assignments).forEach(uid => {
-                        if (!userIdToName[uid]) allUserIds.add(uid);
-                    });
+            // Check plan cache first — avoids re-fetching on repeated imports
+            const cached = _planCache.get(planId);
+            if (cached) {
+                userIdToName = { ...cached.userIdToName };
+            } else {
+                if (plan.owner) {
+                    try {
+                        const members = await _fetchAllPages(
+                            `/groups/${plan.owner}/members?$select=id,displayName,userPrincipalName&$top=100`
+                        );
+                        members.forEach(m => {
+                            if (m.id && (m.displayName || m.userPrincipalName)) {
+                                const name = m.displayName || m.userPrincipalName.split('@')[0];
+                                userIdToName[m.id] = name;
+                                _userCache.set(m.id, name);
+                            }
+                        });
+                    } catch (e) {
+                        console.warn('[MSGraph] Could not fetch group members:', e.message);
+                    }
                 }
-            });
-            if (allUserIds.size > 0) {
-                await _resolveUserDisplayNames([...allUserIds]);
-                allUserIds.forEach(id => {
-                    const name = _userCache.get(id);
-                    if (name) userIdToName[id] = name;
+
+                // $batch fallback for IDs still unresolved
+                const allUserIds = new Set();
+                tasks.forEach(task => {
+                    if (task.assignments && typeof task.assignments === 'object') {
+                        Object.keys(task.assignments).forEach(uid => {
+                            if (!userIdToName[uid]) allUserIds.add(uid);
+                        });
+                    }
                 });
+                if (allUserIds.size > 0) {
+                    await _resolveUserDisplayNames([...allUserIds]);
+                    allUserIds.forEach(id => {
+                        const name = _userCache.get(id);
+                        if (name) userIdToName[id] = name;
+                    });
+                }
+
+                // Populate plan cache so future pulls skip this work
+                _planCache.set(planId, { categoryDescriptions, userIdToName: { ...userIdToName } });
             }
 
-            const project = plannerToProject(plan, buckets, tasks, taskDetailsMap, userIdToName);
+            const project = plannerToProject(plan, buckets, tasks, taskDetailsMap, userIdToName, categoryDescriptions);
+
+            // Seed the delta token so the first auto-pull only fetches *changes* from this point
+            // (runs in background — don't await; a failure here just means first pull is a full fetch)
+            _fetchDeltaTasks(planId).catch(() => {});
+
             return project;
         } catch (err) {
             throw new Error(`importPlan failed: ${err.message}`);
         }
+    }
+
+    /**
+     * Import multiple Planner plans in sequence.
+     * Returns an array of { planId, success, project?, error? }
+     *
+     * @param {string[]} planIds     - Plan IDs to import
+     * @param {Function} onProgress  - Optional callback(completed, total, planTitle)
+     */
+    async function importMultiplePlans(planIds, onProgress) {
+        const results = [];
+        for (let i = 0; i < planIds.length; i++) {
+            const planId = planIds[i];
+            try {
+                const proj = await importPlan(planId);
+                results.push({ planId, success: true, project: proj });
+            } catch (err) {
+                results.push({ planId, success: false, error: err.message });
+            }
+            if (onProgress) onProgress(i + 1, planIds.length);
+        }
+        return results;
     }
 
     async function pushTaskToPlanner(task, planId) {
@@ -745,6 +883,69 @@ import * as msal from '@azure/msal-browser';
     }
 
     // ============================================================================
+    // DELTA SYNC  (incremental task updates — only fetch what changed)
+    // ============================================================================
+
+    /**
+     * Per-plan delta tokens.
+     * On first call returns ALL tasks and seeds the token.
+     * Subsequent calls return ONLY tasks changed since the last token — much faster.
+     * If the token expires (410 Gone) the function automatically falls back to a full fetch.
+     */
+    const _deltaTokens = new Map(); // planId → deltaLink URL
+
+    /**
+     * Fetch changed tasks for a plan using delta query.
+     * Returns { tasks, isDelta } where isDelta=false means a full refresh was done.
+     */
+    async function _fetchDeltaTasks(planId) {
+        const storedToken = _deltaTokens.get(planId);
+        const startPath   = storedToken
+            ? storedToken.replace(GRAPH_ENDPOINT, '')
+            : `/planner/plans/${planId}/tasks/delta`;
+
+        const items = [];
+        let nextPath = startPath;
+        let tokenExpired = false;
+
+        while (nextPath) {
+            let result;
+            try {
+                result = await _call('GET', nextPath);
+            } catch (err) {
+                // 410 Gone = delta token expired → do a full refresh
+                if (err.message.includes('410') || err.message.toLowerCase().includes('gone')
+                    || err.message.includes('resync')) {
+                    console.warn('[MSGraph] Delta token expired — doing full refresh');
+                    _deltaTokens.delete(planId);
+                    tokenExpired = true;
+                    break;
+                }
+                throw err;
+            }
+
+            (result.value || []).forEach(t => items.push(t));
+
+            if (result['@odata.deltaLink']) {
+                // End of delta page — store new token
+                _deltaTokens.set(planId, result['@odata.deltaLink']);
+                nextPath = null;
+            } else {
+                nextPath = result['@odata.nextLink']
+                    ? result['@odata.nextLink'].replace(GRAPH_ENDPOINT, '')
+                    : null;
+            }
+        }
+
+        // If token expired, recurse once for a clean full fetch + new token
+        if (tokenExpired) {
+            return _fetchDeltaTasks(planId);
+        }
+
+        return { tasks: items, isDelta: !!storedToken };
+    }
+
+    // ============================================================================
     // AUTO-SYNC
     // ============================================================================
 
@@ -756,10 +957,14 @@ import * as msal from '@azure/msal-browser';
 
             autoSyncInterval = setInterval(async () => {
                 try {
-                    // Pull-only: fetch remote changes and merge into local project
-                    const { tasks: remoteTasks } = await getPlanDetails(planId);
-                    _mergeRemoteChanges(project, remoteTasks);
-                    console.log('[MSGraph] Auto-pull completed ✓');
+                    // Delta pull: only fetch tasks changed since last sync
+                    const { tasks: changedTasks, isDelta } = await _fetchDeltaTasks(planId);
+                    if (changedTasks.length > 0 || !isDelta) {
+                        _mergeRemoteChanges(project, changedTasks, isDelta);
+                        console.log(`[MSGraph] Auto-pull ✓ — ${isDelta ? changedTasks.length + ' changed' : 'full refresh'}`);
+                    } else {
+                        console.log('[MSGraph] Auto-pull ✓ — no changes');
+                    }
                 } catch (err) {
                     console.warn('[MSGraph] Auto-pull error:', err.message);
                 }
@@ -778,53 +983,92 @@ import * as msal from '@azure/msal-browser';
         }
     }
 
-    function _mergeRemoteChanges(project, remoteTasks) {
-        // project.tasks is a flat list — no recursion needed
-        const remoteMap = new Map(remoteTasks.map(t => [t.id, t]));
+    /**
+     * Merge remote (delta or full) task list into the local project.
+     *
+     * @param {Object}  project      - Local ProjectFlow project (flat task list)
+     * @param {Array}   remoteTasks  - Array from Graph (may include @removed entries for delta)
+     * @param {boolean} isDelta      - true = only changed tasks; false = full task list
+     */
+    function _mergeRemoteChanges(project, remoteTasks, isDelta = false) {
+        // Separate normal updates from deleted tasks (delta only)
+        const deleted = new Set(
+            remoteTasks
+                .filter(t => t['@removed'])
+                .map(t => t.id)
+        );
+        const remoteMap = new Map(
+            remoteTasks
+                .filter(t => !t['@removed'])
+                .map(t => [t.id, t])
+        );
 
         (project.tasks || []).forEach(localTask => {
-            // Skip bucket summary rows (their _plannerId is a bucket ID, not a task ID)
+            // Skip bucket summary rows
             if (localTask.summary || localTask.outlineLevel === 1) return;
 
-            const remote = remoteMap.get(localTask._plannerId);
+            const plannerId = localTask._plannerId;
+
+            // Handle deleted tasks — hide them from the Gantt
+            if (deleted.has(plannerId)) {
+                localTask.isVisible  = false;
+                localTask._deleted   = true;
+                return;
+            }
+
+            const remote = remoteMap.get(plannerId);
+            // For full refreshes, if the remote task is absent it may have moved bucket — skip
             if (!remote) return;
 
-            // Update only if remote was modified more recently
+            // Update only if remote was modified more recently (or it's a full refresh)
             const localMod  = new Date(localTask._lastModified || 0);
             const remoteMod = new Date(remote.lastModifiedDateTime || 0);
 
-            if (remoteMod > localMod) {
-                localTask.percentComplete  = remote.percentComplete || 0;
-                localTask._plannerEtag     = remote['@odata.etag'];
-                localTask._lastModified    = remote.lastModifiedDateTime;
+            if (!isDelta || remoteMod > localMod) {
+                localTask.percentComplete = remote.percentComplete || 0;
+                localTask._plannerEtag    = remote['@odata.etag'];
+                localTask._lastModified   = remote.lastModifiedDateTime;
 
-                // Update start/finish if Planner has dates
-                if (remote.startDateTime) {
-                    localTask.start = remote.startDateTime.split('T')[0];
-                }
-                if (remote.dueDateTime) {
-                    localTask.finish = remote.dueDateTime.split('T')[0];
+                // Title may have been edited in Planner
+                if (remote.title && remote.title !== localTask.name) {
+                    localTask.name = remote.title;
                 }
 
-                // Sync assignments: keep real IDs and resolve display names
+                // Update dates
+                if (remote.startDateTime) localTask.start  = remote.startDateTime.split('T')[0];
+                if (remote.dueDateTime)   localTask.finish = remote.dueDateTime.split('T')[0];
+
+                // Recompute duration
+                if (localTask.start && localTask.finish) {
+                    localTask.durationDays = Math.max(1, Math.ceil(
+                        (new Date(localTask.finish) - new Date(localTask.start)) / 864e5
+                    ));
+                }
+
+                // Sync assignments — keep real Azure AD IDs + resolve display names
                 if (remote.assignments && typeof remote.assignments === 'object') {
                     const userIds = Object.keys(remote.assignments);
-                    // Keep real Azure AD IDs for future push operations
                     localTask._plannerAssigneeIds = userIds;
-                    // Resolve to display names for UI
                     localTask.resourceNames = userIds.map(
                         id => _userCache.get(id) || id.substring(0, 8) + '…'
                     );
                 }
+
+                // Priority update
+                if (typeof remote.priority === 'number') {
+                    localTask.priorityNum   = remote.priority;
+                    localTask.priority      = PRIORITY_LABELS[remote.priority] || 'Medium';
+                }
             }
         });
 
-        // Recompute bucket summary % from their leaf tasks
+        // Recompute bucket summary % from their (visible) leaf tasks
         const buckets = (project.tasks || []).filter(t => t.summary || t.outlineLevel === 1);
         buckets.forEach(bucket => {
             const leaves = (project.tasks || []).filter(
                 t => t._plannerBucketId === bucket._plannerBucketId
-                    && (t.outlineLevel !== 1 && !t.summary)
+                    && !t.summary && t.outlineLevel !== 1
+                    && !t._deleted
             );
             if (leaves.length > 0) {
                 bucket.percentComplete = Math.round(
@@ -989,7 +1233,7 @@ import * as msal from '@azure/msal-browser';
             wizard.appendChild(signInBtn);
         }
 
-        // ── Step 2: Select Plan ──
+        // ── Step 2: Select Plan(s) ──
         async function renderPlanSelection() {
             const loadingMsg = document.createElement('div');
             loadingMsg.style.cssText = 'text-align:center;padding:20px;color:var(--text-muted,#888);font-size:0.85rem;';
@@ -1005,58 +1249,122 @@ import * as msal from '@azure/msal-browser';
                     return;
                 }
 
-                const label = document.createElement('label');
-                label.textContent = 'Select a Plan to import:';
-                label.style.cssText = 'font-weight:500;display:block;margin-bottom:10px;font-size:0.85rem;color:var(--text-secondary,#a0aec0);';
+                const label = document.createElement('div');
+                label.style.cssText = 'font-weight:500;margin-bottom:10px;font-size:0.85rem;color:var(--text-secondary,#a0aec0);display:flex;justify-content:space-between;align-items:center;';
+                label.innerHTML = `
+                    <span>Select plans to import:</span>
+                    <span style="font-size:11px;opacity:0.7">${plans.length} plan${plans.length !== 1 ? 's' : ''} found</span>
+                `;
                 wizard.appendChild(label);
 
-                const select = document.createElement('select');
-                select.style.cssText = 'width:100%;padding:10px;border:1px solid rgba(255,255,255,0.15);border-radius:8px;background:var(--bg-input,#2a2a3e);color:var(--text-primary,#e2e8f0);font-size:13px;margin-bottom:12px;';
+                // ── Checkbox list ──
+                const listWrap = document.createElement('div');
+                listWrap.style.cssText = `
+                    max-height: 220px; overflow-y: auto;
+                    border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
+                    background: var(--bg-input, rgba(0,0,0,0.2));
+                    margin-bottom: 12px;
+                `;
 
-                const placeholder = document.createElement('option');
-                placeholder.value = '';
-                placeholder.textContent = `-- ${plans.length} plan${plans.length > 1 ? 's' : ''} found --`;
-                select.appendChild(placeholder);
+                const checkboxes = [];
+                plans.forEach((plan, idx) => {
+                    const row = document.createElement('label');
+                    row.style.cssText = `
+                        display: flex; align-items: center; gap: 10px;
+                        padding: 9px 12px; cursor: pointer; font-size: 13px;
+                        border-bottom: 1px solid rgba(255,255,255,0.06);
+                        color: var(--text-primary, #e2e8f0);
+                        transition: background 0.15s;
+                    `;
+                    row.addEventListener('mouseenter', () => row.style.background = 'rgba(255,255,255,0.05)');
+                    row.addEventListener('mouseleave', () => row.style.background = '');
 
-                plans.forEach(plan => {
-                    const option = document.createElement('option');
-                    option.value = plan.id;
-                    option.textContent = plan.title;
-                    select.appendChild(option);
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.value = plan.id;
+                    cb.dataset.title = plan.title;
+                    cb.style.cssText = 'cursor:pointer;flex-shrink:0;accent-color:#6366f1;';
+                    cb.addEventListener('change', updateImportBtn);
+                    checkboxes.push(cb);
+
+                    const nameSpan = document.createElement('span');
+                    nameSpan.textContent = plan.title;
+                    nameSpan.style.overflow = 'hidden';
+                    nameSpan.style.textOverflow = 'ellipsis';
+                    nameSpan.style.whiteSpace = 'nowrap';
+
+                    row.appendChild(cb);
+                    row.appendChild(nameSpan);
+                    listWrap.appendChild(row);
                 });
+                wizard.appendChild(listWrap);
 
+                // ── Select-all toggle ──
+                const toggleRow = document.createElement('div');
+                toggleRow.style.cssText = 'margin-bottom:12px;font-size:12px;';
+                const toggleLink = document.createElement('a');
+                toggleLink.href = '#';
+                toggleLink.textContent = 'Select all';
+                toggleLink.style.cssText = 'color:#6366f1;text-decoration:none;';
+                let allSelected = false;
+                toggleLink.addEventListener('click', e => {
+                    e.preventDefault();
+                    allSelected = !allSelected;
+                    checkboxes.forEach(cb => cb.checked = allSelected);
+                    toggleLink.textContent = allSelected ? 'Deselect all' : 'Select all';
+                    updateImportBtn();
+                });
+                toggleRow.appendChild(toggleLink);
+                wizard.appendChild(toggleRow);
+
+                // ── Import button ──
                 const importBtn = document.createElement('button');
                 importBtn.type = 'button';
                 importBtn.textContent = '📥 Import Plan';
+                importBtn.disabled = true;
                 importBtn.style.cssText = `
-                    width: 100%;
-                    padding: 14px;
+                    width: 100%; padding: 14px;
                     background: linear-gradient(135deg, #22c55e, #16a34a);
-                    color: white;
-                    border: none;
-                    border-radius: 8px;
-                    font-size: 15px;
-                    font-weight: 600;
-                    cursor: pointer;
-                    transition: all 0.2s;
+                    color: white; border: none; border-radius: 8px;
+                    font-size: 15px; font-weight: 600; cursor: pointer;
+                    transition: all 0.2s; opacity: 0.5;
                 `;
-                importBtn.addEventListener('mouseenter', () => importBtn.style.transform = 'translateY(-1px)');
+                importBtn.addEventListener('mouseenter', () => { if (!importBtn.disabled) importBtn.style.transform = 'translateY(-1px)'; });
                 importBtn.addEventListener('mouseleave', () => importBtn.style.transform = '');
 
-                importBtn.addEventListener('click', () => {
-                    const planId = select.value;
-                    if (!planId) {
-                        showStatus('Please select a plan', 'error');
-                        return;
+                function updateImportBtn() {
+                    const selected = checkboxes.filter(cb => cb.checked);
+                    importBtn.disabled = selected.length === 0;
+                    importBtn.style.opacity = selected.length > 0 ? '1' : '0.5';
+                    importBtn.style.cursor  = selected.length > 0 ? 'pointer' : 'not-allowed';
+                    if (selected.length === 0) {
+                        importBtn.textContent = '📥 Import Plan';
+                    } else if (selected.length === 1) {
+                        importBtn.textContent = `📥 Import 1 Plan`;
+                    } else {
+                        importBtn.textContent = `📥 Import ${selected.length} Plans → Portfolio`;
                     }
-                    const planTitle = select.options[select.selectedIndex].textContent;
+                }
+
+                importBtn.addEventListener('click', () => {
+                    const selected = checkboxes.filter(cb => cb.checked);
+                    if (selected.length === 0) { showStatus('Please select at least one plan', 'error'); return; }
+
                     importBtn.disabled = true;
-                    importBtn.textContent = '⏳ Importing...';
                     importBtn.style.opacity = '0.7';
-                    onComplete({ planId, planTitle });
+                    importBtn.textContent = `⏳ Importing ${selected.length} plan${selected.length > 1 ? 's' : ''}…`;
+
+                    if (selected.length === 1) {
+                        // Single plan: original behavior
+                        onComplete({ planId: selected[0].value, planTitle: selected[0].dataset.title });
+                    } else {
+                        // Multiple plans: portfolio import
+                        const planIds    = selected.map(cb => cb.value);
+                        const planTitles = selected.map(cb => cb.dataset.title);
+                        onComplete({ planIds, planTitles, isPortfolioImport: true });
+                    }
                 });
 
-                wizard.appendChild(select);
                 wizard.appendChild(importBtn);
 
             } catch (err) {
@@ -1136,10 +1444,11 @@ import * as msal from '@azure/msal-browser';
         pullBtn.addEventListener('click', async () => {
             try {
                 pullBtn.disabled = true;
-                pullBtn.textContent = '⏳ Pulling...';
-                const { tasks: remoteTasks } = await getPlanDetails(planId);
-                _mergeRemoteChanges(project, remoteTasks);
-                syncTime.textContent = `Last pull: ${new Date().toLocaleTimeString()}`;
+                pullBtn.textContent = '⏳ Pulling…';
+                const { tasks: changedTasks, isDelta } = await _fetchDeltaTasks(planId);
+                _mergeRemoteChanges(project, changedTasks, isDelta);
+                const changeCount = isDelta ? `${changedTasks.length} change${changedTasks.length !== 1 ? 's' : ''}` : 'full refresh';
+                syncTime.textContent = `Last pull: ${new Date().toLocaleTimeString()} — ${changeCount}`;
                 pullBtn.textContent = '🔄 Pull from Planner';
                 pullBtn.disabled = false;
             } catch (err) {
@@ -1220,6 +1529,7 @@ import * as msal from '@azure/msal-browser';
         getPlanDetails,
         getPlanTaskDetails,
         importPlan,
+        importMultiplePlans,
         pushTaskToPlanner,
         syncProjectToPlanner,
         startAutoSync,
