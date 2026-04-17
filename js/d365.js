@@ -232,6 +232,40 @@
     }
 
     /**
+     * P1 #24: Fetch all pages from OData endpoint (handles @odata.nextLink pagination)
+     * @param {string} entity - OData entity name
+     * @param {string} query - OData query string
+     * @returns {Array} All records across all pages
+     */
+    async function fetchAllPages(entity, query = '') {
+        const all = [];
+        let result = await _callDataverse('GET', entity, query);
+        if (result.value) all.push(...result.value);
+        
+        let nextLink = result['@odata.nextLink'];
+        let pageCount = 1;
+        const MAX_PAGES = 20; // Safety limit: 20 pages × 5000 = 100,000 records
+        
+        while (nextLink && pageCount < MAX_PAGES) {
+            const token = await _getAccessToken();
+            const response = await fetch(nextLink, {
+                headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' }
+            });
+            if (!response.ok) break;
+            result = await response.json();
+            if (result.value) all.push(...result.value);
+            nextLink = result['@odata.nextLink'];
+            pageCount++;
+        }
+        
+        if (pageCount >= MAX_PAGES) {
+            console.warn(`[D365] Pagination capped at ${MAX_PAGES} pages (${all.length} records)`);
+        }
+        
+        return all;
+    }
+
+    /**
      * Map Project Operations project to ProjectFlow format
      */
     function _mapProjectOps(proj) {

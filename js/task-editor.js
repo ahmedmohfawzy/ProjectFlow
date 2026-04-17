@@ -128,8 +128,12 @@
 
     if (taskIndex === -1) return [];
 
+    // P1 #15: Guard against corrupted outlineLevel causing excessive iteration
+    const MAX_DEPTH = 50;
+    let depth = 0;
+
     // Search backwards for parents
-    for (let i = taskIndex - 1; i >= 0; i--) {
+    for (let i = taskIndex - 1; i >= 0 && depth < MAX_DEPTH; i--) {
       const candidate = project.tasks[i];
       const candidateLevel = candidate.outlineLevel || 1;
 
@@ -139,6 +143,7 @@
       // If we find the immediate parent level, add it and continue searching up
       if (candidateLevel === taskLevel - 1) {
         ancestors.unshift(candidate);
+        depth++;
       }
     }
 
@@ -167,7 +172,7 @@
       if (dayOfWeek !== 0 && dayOfWeek !== 6) {
         workDays++;
       }
-      current.setDate(current.getDate() + 1);
+      current.setTime(current.getTime() + 86400000); // P1 #11: constant ms offset
     }
 
     return workDays;

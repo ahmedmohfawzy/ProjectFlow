@@ -128,7 +128,7 @@ app.use(cors({
         callback(null, true);
     }
 }));
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '10mb' })); // P2 #16: reduced from 50mb
 app.use('/api', rateLimiter);
 
 // Security headers
