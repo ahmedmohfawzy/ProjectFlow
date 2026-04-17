@@ -23,6 +23,7 @@ import { UIHelpers } from './ui-helpers.js';
 import { MSProjectXML } from './xml-parser.js';
 import { PlannerParser } from './planner-parser.js';
 import { D365Client } from './d365.js';
+import { D365Export } from './d365-export.js';
 import { MSGraphClient } from './ms-graph.js';
 import { ScenariosManager } from './scenarios.js';
 import { PluginSystem, renderPluginManager } from './plugins.js';
@@ -470,6 +471,11 @@ import { TeamsBridge } from './teams-bridge.js';
 
         $('btnExport').addEventListener('click', handleExportXML);
         $('btnExportExcel').addEventListener('click', handleExportCSV);
+
+        // ── D365 direct-import exports (Excel templates) ──
+        $('btnExportD365Ops')    && $('btnExportD365Ops').addEventListener('click', () => handleD365Export('operations'));
+        $('btnExportD365FinOps') && $('btnExportD365FinOps').addEventListener('click', () => handleD365Export('financeOps'));
+        $('btnExportD365Both')   && $('btnExportD365Both').addEventListener('click', () => handleD365Export('both'));
 
         $('btnNewProject').addEventListener('click', showNewProjectModal);
         $('btnWelcomeNew').addEventListener('click', showNewProjectModal);
@@ -991,6 +997,39 @@ import { TeamsBridge } from './teams-bridge.js';
         showToast('success', 'Exported CSV');
     }
 
+    /**
+     * Export the current project in a format ready for direct upload to D365.
+     * Produces one or two Excel templates (.xlsx) whose sheet names & columns
+     * match the target D365 entity schemas.
+     *
+     * @param {'operations'|'financeOps'|'both'} mode
+     *   - 'operations' → Project Operations (Dataverse: msdyn_projects + msdyn_projecttasks)
+     *   - 'financeOps' → Finance & Operations Project Accounting (ProjTable + ProjActivity)
+     *   - 'both'       → triggers two sequential downloads
+     */
+    function handleD365Export(mode) {
+        if (!project) { showToast('error', 'No project loaded'); return; }
+        if (typeof XLSX === 'undefined') { showToast('error', 'XLSX library not loaded'); return; }
+        if (!window.D365Export) { showToast('error', 'D365 export module missing'); return; }
+        try {
+            if (mode === 'operations') {
+                D365Export.exportOperations(project);
+                showToast('success', 'Exported for D365 Project Operations ✓');
+            } else if (mode === 'financeOps') {
+                D365Export.exportFinanceOps(project);
+                showToast('success', 'Exported for D365 Project Accounting (F&O) ✓');
+            } else if (mode === 'both') {
+                D365Export.exportBoth(project);
+                showToast('success', 'Exported both D365 formats ✓');
+            } else {
+                showToast('error', 'Unknown D365 export mode');
+            }
+        } catch (err) {
+            console.error('D365 export failed:', err);
+            showToast('error', 'D365 export failed: ' + err.message);
+        }
+    }
+
     // ══════ NEW PROJECT ══════
     function showNewProjectModal() {
         $('inputProjectName').value = ''; $('inputProjectManager').value = '';
@@ -1072,7 +1111,7 @@ import { TeamsBridge } from './teams-bridge.js';
         els.workspace.classList.remove('hidden');
         els.projectNameDisplay.textContent = project.name;
 
-        ['btnExport','btnExportExcel','btnAddTask','btnAddMilestone','btnDeleteTask','btnIndent','btnOutdent','btnZoomIn','btnZoomOut','btnSetBaseline','btnAutoLevel','btnReports','btnCustomFields','btnExportTrigger'].forEach(id => $(id) && ($(id).disabled = false));
+        ['btnExport','btnExportExcel','btnAddTask','btnAddMilestone','btnDeleteTask','btnIndent','btnOutdent','btnZoomIn','btnZoomOut','btnSetBaseline','btnAutoLevel','btnReports','btnCustomFields','btnExportTrigger','btnExportD365Ops','btnExportD365FinOps','btnExportD365Both'].forEach(id => $(id) && ($(id).disabled = false));
 
         GanttChart.init(els.ganttCanvas, els.ganttHeader, {
             onTaskSelect: (task) => { selectedTaskIds.clear(); selectedTaskIds.add(task.uid); renderTable(); openDetailPanel(task); },
