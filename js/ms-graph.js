@@ -71,12 +71,24 @@ import * as msal from '@azure/msal-browser';
         return `https://login.microsoftonline.com/organizations/adminconsent?client_id=${DEFAULT_CLIENT_ID}&redirect_uri=${encodeURIComponent(uri)}`;
     }
 
-    // Use redirect instead of popup — works in Teams iframe + all browsers
-    function signIn() {
+    // Detect if running inside an iframe (e.g. Microsoft Teams)
+    function _isInIframe() {
+        try { return window.self !== window.top; } catch (_) { return true; }
+    }
+
+    // Use popup when in iframe (Teams), redirect otherwise
+    async function signIn() {
         try {
             if (!msalApp) throw new Error('MSGraphClient not configured.');
-            // loginRedirect navigates the page — no return value
-            msalApp.loginRedirect({ scopes: SCOPES, prompt: 'select_account' });
+
+            if (_isInIframe()) {
+                // Teams iframe blocks full-page redirects — use popup instead
+                const result = await msalApp.loginPopup({ scopes: SCOPES, prompt: 'select_account' });
+                return result;
+            } else {
+                // Standalone browser — redirect flow
+                msalApp.loginRedirect({ scopes: SCOPES, prompt: 'select_account' });
+            }
         } catch (err) {
             throw new Error(`Sign-in failed: ${err.message}`);
         }
@@ -1190,7 +1202,7 @@ import * as msal from '@azure/msal-browser';
             }
         }
 
-        // ── Step 1: Sign In (redirect flow — works in Teams iframe) ──
+        // ── Step 1: Sign In (popup in Teams iframe, redirect in standalone) ──
         function renderSignIn() {
             const msLogo = `<svg viewBox="0 0 21 21" fill="none" width="20" height="20" style="vertical-align:middle;margin-right:10px;flex-shrink:0">
                 <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
@@ -1199,9 +1211,13 @@ import * as msal from '@azure/msal-browser';
                 <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
             </svg>`;
 
+            const inIframe = _isInIframe();
+
             const note = document.createElement('p');
             note.style.cssText = 'font-size:0.78rem;color:var(--text-muted,#888);text-align:center;margin:0 0 14px;line-height:1.5;';
-            note.textContent = 'You will be redirected to Microsoft login and brought back automatically.';
+            note.textContent = inIframe
+                ? 'A popup will open for Microsoft login. Please allow popups if prompted.'
+                : 'You will be redirected to Microsoft login and brought back automatically.';
             wizard.appendChild(note);
 
             const signInBtn = document.createElement('button');
@@ -1217,12 +1233,18 @@ import * as msal from '@azure/msal-browser';
             signInBtn.addEventListener('mouseenter', () => signInBtn.style.transform = 'translateY(-2px)');
             signInBtn.addEventListener('mouseleave', () => signInBtn.style.transform = '');
 
-            signInBtn.addEventListener('click', () => {
-                // loginRedirect navigates away — no await needed
+            signInBtn.addEventListener('click', async () => {
                 signInBtn.disabled = true;
-                signInBtn.innerHTML = '⏳ Redirecting to Microsoft…';
+                signInBtn.innerHTML = inIframe
+                    ? '⏳ Waiting for sign-in popup…'
+                    : '⏳ Redirecting to Microsoft…';
                 try {
-                    signIn(); // triggers full-page redirect
+                    await signIn();
+                    // If popup flow (iframe/Teams): we get here after successful sign-in
+                    if (isAuthenticated()) {
+                        showStatus('✅ Signed in successfully!', 'success');
+                        await renderPlanSelection();
+                    }
                 } catch (err) {
                     showStatus('Sign-in failed: ' + err.message, 'error');
                     signInBtn.disabled = false;
