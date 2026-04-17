@@ -5,31 +5,33 @@
 > **نطاق المراجعة:** المعادلات الحسابية + الأداء والكفاءة + التكامل والربط + Edge Cases
 > **إجمالي المشاكل المكتشفة:** 60+ مشكلة موزعة على 3 مستويات أولوية
 
-## ✅ حالة التنفيذ (محدّث 17 أبريل 2026)
+## ✅ حالة التنفيذ (محدّث 17 أبريل 2026) — مكتمل ✅
 
 | # | المشكلة | الأولوية | الحالة |
 |---|---------|----------|--------|
 | 1 | XXE في XML Parser | P0 | ✅ تم |
 | 2 | Render Scheduler (RAF) | P0 | ✅ موجود بالفعل |
-| 3 | CPM Caching | P0 | ⏳ يحتاج dirty flag |
+| 3 | CPM Caching | P0 | ✅ موجود بالفعل |
 | 4 | structuredClone (undo + scenarios + task-editor) | P0 | ✅ تم |
 | 5 | XSS (board.js tags) | P0 | ✅ تم |
 | 6 | localStorage Quota + notification | P0 | ✅ تم |
 | 7 | Canvas Overflow | P0 | ✅ موجود بالفعل |
 | 8 | EVM safeDate | P0 | ✅ تم |
 | 9 | EAC Formula | P1 | ✅ تم |
-| 10 | Resource Holidays | P1 | ⏳ يحتاج WorkCalendar |
+| 10 | Resource Holidays | P1 | ✅ تم (WorkCalendar integration) |
 | 11 | Resource Iterator DST | P1 | ✅ تم |
-| 12 | CPM Calendar Days | P1 | ⏳ تعقيد عالي |
+| 12 | CPM Calendar Days → Working Days | P1 | ✅ تم (WorkCalendar.getWorkingDays) |
 | 14 | Negative Duration | P1 | ✅ تم |
 | 15 | getAncestors Guard | P1 | ✅ تم |
 | 20 | Dependency findIndex → Map | P1 | ✅ تم |
 | 23 | SQL Field Injection | P1 | ✅ موجود بالفعل |
 | 24 | D365 Pagination | P1 | ✅ تم |
 | 25 | D365 Rate Limit | P1 | ✅ تم |
+| 26 | D365 ETag Concurrency | P1 | ✅ تم |
 | 27 | CORS Production | P1 | ✅ تم |
 | 28 | HTTPS Enforcement | P1 | ✅ تم |
 | 29 | File Size Limit | P1 | ✅ تم |
+| 30 | Excel Leap-Year 1900 Bug | P1 | ✅ تم |
 | P2.13 | UTF-8 BOM Strip | P2 | ✅ تم |
 | P2.16 | JSON Body Limit | P2 | ✅ تم |
 
