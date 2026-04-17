@@ -76,15 +76,39 @@ import * as msal from '@azure/msal-browser';
         try { return window.self !== window.top; } catch (_) { return true; }
     }
 
-    // Use popup when in iframe (Teams), redirect otherwise
+    // Detect if Teams SDK is available
+    function _hasTeamsSDK() {
+        return typeof microsoftTeams !== 'undefined' && microsoftTeams.authentication;
+    }
+
+    // Build auth.html URL relative to current page
+    function _getAuthPopupUrl() {
+        const origin = window.location.origin;
+        const path   = window.location.pathname.replace(/\/[^/]*$/, '/');
+        return origin + path + 'auth.html';
+    }
+
+    // Use Teams SDK auth popup in Teams, loginPopup as fallback, redirect for standalone
     async function signIn() {
         try {
             if (!msalApp) throw new Error('MSGraphClient not configured.');
 
-            if (_isInIframe()) {
-                // Teams iframe blocks full-page redirects — use popup instead
-                const result = await msalApp.loginPopup({ scopes: SCOPES, prompt: 'select_account' });
-                return result;
+            if (_isInIframe() && _hasTeamsSDK()) {
+                // ── Teams: use Teams SDK managed popup → auth.html ──
+                // Teams blocks both loginRedirect and loginPopup directly.
+                // microsoftTeams.authentication.authenticate() opens a controlled popup.
+                const resultStr = await microsoftTeams.authentication.authenticate({
+                    url: _getAuthPopupUrl(),
+                    width: 600,
+                    height: 600,
+                });
+                // auth.html stored tokens in localStorage via MSAL.
+                // Refresh MSAL to pick up the cached account.
+                const accounts = msalApp.getAllAccounts();
+                return accounts.length > 0 ? { account: accounts[0] } : JSON.parse(resultStr || '{}');
+            } else if (_isInIframe()) {
+                // Non-Teams iframe — try popup (may be blocked)
+                return await msalApp.loginPopup({ scopes: SCOPES, prompt: 'select_account' });
             } else {
                 // Standalone browser — redirect flow
                 msalApp.loginRedirect({ scopes: SCOPES, prompt: 'select_account' });

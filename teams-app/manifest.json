@@ -37,7 +37,8 @@
   },
   "permissions": ["identity"],
   "validDomains": [
-    "ahmedmohfawzy.github.io"
+    "ahmedmohfawzy.github.io",
+    "login.microsoftonline.com"
   ],
   "showLoadingIndicator": false,
   "isFullScreen": false
