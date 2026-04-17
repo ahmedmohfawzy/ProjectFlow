@@ -333,6 +333,10 @@
     function daysBetween(d1, d2) {
         const t1 = new Date(d1); t1.setHours(0, 0, 0, 0);
         const t2 = new Date(d2); t2.setHours(0, 0, 0, 0);
+        // P1 #12: Use working days when WorkCalendar is available
+        if (typeof WorkCalendar !== 'undefined' && WorkCalendar.getWorkingDays) {
+            return WorkCalendar.getWorkingDays(t1, t2);
+        }
         return Math.round((t2 - t1) / 86400000);
     }
 

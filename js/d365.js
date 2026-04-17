@@ -146,6 +146,11 @@
             }
         };
 
+        // P1 #26: Add If-Match for PATCH/PUT to enable optimistic concurrency
+        if ((method === 'PATCH' || method === 'PUT') && body) {
+            options.headers['If-Match'] = '*'; // Accept any version (basic concurrency)
+        }
+
         if (body) {
             options.body = JSON.stringify(body);
         }

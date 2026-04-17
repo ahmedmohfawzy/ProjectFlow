@@ -50,9 +50,13 @@
             const dailyHours = ((asgn.units || 1) * 8);
 
             for (let d = 0; d < days; d++) {
-                const date = new Date(start.getTime() + d * 86400000); // P1 #11: constant ms offset
-                // Skip weekends
-                if (date.getDay() === 0 || date.getDay() === 6) continue;
+                const date = new Date(start.getTime() + d * 86400000);
+                // P1 #10: Use WorkCalendar for holidays + regional weekends
+                if (typeof WorkCalendar !== 'undefined' && WorkCalendar.isWorkingDay) {
+                    if (!WorkCalendar.isWorkingDay(date)) continue;
+                } else {
+                    if (date.getDay() === 0 || date.getDay() === 6) continue;
+                }
 
                 const key = date.toISOString().split('T')[0];
                 resLoad.dailyLoad[key] = (resLoad.dailyLoad[key] || 0) + dailyHours;
@@ -116,9 +120,13 @@
         const start = new Date(projectStart);
         const end = new Date(projectEnd);
 
-        // P1 #11: Use constant ms increment to avoid DST infinite loop
         for (let d = new Date(start); d.getTime() <= end.getTime(); d = new Date(d.getTime() + 86400000)) {
-            if (d.getDay() === 0 || d.getDay() === 6) continue;
+            // P1 #10: Use WorkCalendar for holidays + regional weekends
+            if (typeof WorkCalendar !== 'undefined' && WorkCalendar.isWorkingDay) {
+                if (!WorkCalendar.isWorkingDay(d)) continue;
+            } else {
+                if (d.getDay() === 0 || d.getDay() === 6) continue;
+            }
             const key = d.toISOString().split('T')[0];
             data.push({
                 date: key,
