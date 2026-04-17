@@ -3,8 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>ProjectFlow — Sign In</title>
-    <script src="https://alcdn.msauth.net/browser/5.6.0/js/msal-browser.min.js"></script>
-    <script src="https://res.cdn.office.net/teams-js/2.24.0/js/MicrosoftTeams.min.js"></script>
     <style>
         body { margin:0; display:flex; align-items:center; justify-content:center; height:100vh;
                background:#1e1e2e; color:#e2e8f0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -13,6 +11,8 @@
                    border-top:3px solid #6366f1; border-radius:50%; animation:spin 0.8s linear infinite; margin-bottom:12px; }
         @keyframes spin { to { transform:rotate(360deg); } }
     </style>
+  <script type="module" crossorigin src="/ProjectFlow/assets/auth-D2f0vA9A.js"></script>
+  <link rel="modulepreload" crossorigin href="/ProjectFlow/assets/PublicClientApplication-D80GVUWi.js">
 </head>
 <body>
 <div class="msg">
@@ -20,77 +20,6 @@
     <p id="status">Signing in with Microsoft…</p>
 </div>
 
-<script>
-(async function () {
-    const CLIENT_ID = '5c5eccbf-b7fb-4041-b969-44da0d6cf406';
-    const AUTHORITY = 'https://login.microsoftonline.com/organizations';
-    const SCOPES    = ['Tasks.ReadWrite', 'Group.Read.All', 'User.Read', 'User.ReadBasic.All', 'offline_access'];
-
-    // Redirect URI = this page itself
-    const REDIRECT_URI = window.location.origin + window.location.pathname;
-
-    const statusEl = document.getElementById('status');
-
-    try {
-        // Initialize MSAL
-        const msalConfig = {
-            auth: {
-                clientId: CLIENT_ID,
-                authority: AUTHORITY,
-                redirectUri: REDIRECT_URI,
-                navigateToLoginRequestUrl: false,
-            },
-            cache: {
-                cacheLocation: 'localStorage',
-                storeAuthStateInCookie: true,
-            },
-            system: {
-                allowNativeBroker: false,
-            },
-        };
-
-        const msalApp = new msal.PublicClientApplication(msalConfig);
-        await msalApp.initialize();
-
-        // Check if we're returning from a redirect (Microsoft login callback)
-        const redirectResult = await msalApp.handleRedirectPromise();
-
-        if (redirectResult && redirectResult.account) {
-            // ✅ Login successful — notify Teams parent
-            statusEl.textContent = 'Signed in! Closing…';
-
-            try {
-                await microsoftTeams.app.initialize();
-                microsoftTeams.authentication.notifySuccess(JSON.stringify({
-                    accountId: redirectResult.account.homeAccountId,
-                    username: redirectResult.account.username,
-                    name: redirectResult.account.name,
-                }));
-            } catch (_) {
-                // Not in Teams popup — just close the window
-                window.close();
-            }
-        } else {
-            // First load — initiate the redirect to Microsoft login
-            statusEl.textContent = 'Redirecting to Microsoft login…';
-            await msalApp.loginRedirect({
-                scopes: SCOPES,
-                prompt: 'select_account',
-            });
-        }
-    } catch (err) {
-        statusEl.textContent = '❌ ' + err.message;
-        statusEl.style.color = '#f87171';
-
-        // Notify Teams of failure
-        try {
-            await microsoftTeams.app.initialize();
-            microsoftTeams.authentication.notifyFailure(err.message || 'Login failed');
-        } catch (_) {
-            // Not in Teams — show error
-        }
-    }
-})();
-</script>
+<script src="https://res.cdn.office.net/teams-js/2.24.0/js/MicrosoftTeams.min.js"></script>
 </body>
 </html>
