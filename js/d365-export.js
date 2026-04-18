@@ -39,6 +39,18 @@
         return date.toISOString().split('T')[0]; // YYYY-MM-DD
     }
 
+    /** dd/mm/yyyy for the Project Operations WBS template (matches the
+     *  default UK/Europe locale that D365's exported template uses). */
+    function ddmmyyyy(d) {
+        if (!d) return '';
+        const date = (d instanceof Date) ? d : new Date(d);
+        if (isNaN(date.getTime())) return '';
+        const dd = String(date.getUTCDate()).padStart(2, '0');
+        const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+        const yyyy = date.getUTCFullYear();
+        return `${dd}/${mm}/${yyyy}`;
+    }
+
     /** Full ISO datetime (F&O often wants time component) */
     function isoDateTime(d) {
         if (!d) return '';
@@ -246,8 +258,8 @@
                 cleanCell(formatPredecessors(t.predecessors, taskById, wbsMap)),
                 cleanCell(extras.category),
                 extras.effort,
-                isoDate(t.start),
-                isoDate(t.finish),
+                ddmmyyyy(t.start),
+                ddmmyyyy(t.finish),
                 durationText(t.durationDays),
                 Number(extras.nRes) || 0,
                 cleanCell(extras.role)
