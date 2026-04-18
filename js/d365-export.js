@@ -51,6 +51,25 @@
         return `${dd}/${mm}/${yyyy}`;
     }
 
+    /**
+     * Return a real Date object for cell values — stored in the XLSX as a
+     * proper Excel date serial (what D365 needs for Edm.DateTimeOffset).
+     * Falls back to '' when the input is empty/invalid so the AoA still
+     * renders cleanly for blank rows.
+     */
+    function toExcelDate(d) {
+        if (!d) return '';
+        const date = (d instanceof Date) ? d : new Date(d);
+        if (isNaN(date.getTime())) return '';
+        // Normalize to a UTC-midnight Date so Excel's epoch conversion is stable
+        return new Date(Date.UTC(
+            date.getUTCFullYear(),
+            date.getUTCMonth(),
+            date.getUTCDate(),
+            0, 0, 0, 0
+        ));
+    }
+
     /** Full ISO datetime (F&O often wants time component) */
     function isoDateTime(d) {
         if (!d) return '';
@@ -152,11 +171,18 @@
     // lookup values used for the dropdowns in D365.
     // ───────────────────────────────────────────────────────────────────
 
-    /** Return a safe value for Duration column — D365 expects "Nd" or similar text */
-    function durationText(durationDays) {
+    /**
+     * Duration cell for the WBS template.
+     * The official D365 template stores Duration as a STRING like "186 days"
+     * (shared string), e.g. sharedStrings entries "1 day", "2 days", "186 days".
+     * D365's importer reads Duration as Edm.String; emitting a raw number
+     * caused the IEEE754Compatible/Decimal conflict we saw earlier.
+     */
+    function durationDays(durationDays) {
         const d = Number(durationDays);
-        if (!isFinite(d) || d <= 0) return '0 days';
-        return `${d} day${d === 1 ? '' : 's'}`;
+        if (!isFinite(d) || d < 0) return '0 days';
+        const n = Math.round(d);
+        return n === 1 ? '1 day' : `${n} days`;
     }
 
     /**
@@ -219,21 +245,24 @@
         const projName = cleanCell(project.name || 'Untitled Project');
 
         // ─── Sheet 1: "Sheet1" — WBS template ──────────────────────
-        // We build row by row so we can style / merge the header block.
+        // Row layout matches the official D365 Project Operations template:
+        //   Row 1: blank
+        //   Row 2: "Work breakdown structure" (title, merged A2:J2)
+        //   Row 3-4: blank
+        //   Row 5: Project ID  | <projId>
+        //   Row 6: Project name| <projName>
+        //   Row 7: blank
+        //   Row 8: table header
+        //   Row 9+: data rows
         const aoa = [];
-
-        // Row 1: title
-        aoa.push(['Work breakdown structure']);
-        // Row 2-3: blank
-        aoa.push([]);
-        aoa.push([]);
-        // Row 4: Project ID label + value
-        aoa.push(['Project ID', projId]);
-        // Row 5: Project name label + value
-        aoa.push(['Project name', projName]);
-        // Row 6: blank
-        aoa.push([]);
-        // Row 7: table header
+        aoa.push([]);                                        // Row 1
+        aoa.push(['Work breakdown structure']);              // Row 2
+        aoa.push([]);                                        // Row 3
+        aoa.push([]);                                        // Row 4
+        aoa.push(['Project ID',   projId]);                  // Row 5
+        aoa.push(['Project name', projName]);                // Row 6
+        aoa.push([]);                                        // Row 7
+        // Row 8: table header
         const tableHeader = [
             'WBS ID',
             'Task name',
@@ -257,16 +286,52 @@
                 cleanCell(t.name || 'Unnamed Task'),
                 cleanCell(formatPredecessors(t.predecessors, taskById, wbsMap)),
                 cleanCell(extras.category),
-                extras.effort,
-                ddmmyyyy(t.start),
-                ddmmyyyy(t.finish),
-                durationText(t.durationDays),
-                Number(extras.nRes) || 0,
+                Number(extras.effort) || 0,        // Edm.Decimal
+                toExcelDate(t.start),              // Edm.DateTimeOffset (see post-pass)
+                toExcelDate(t.finish),             // Edm.DateTimeOffset
+                durationDays(t.durationDays),      // Edm.Decimal (days)
+                Number(extras.nRes) || 0,          // Edm.Int32
                 cleanCell(extras.role)
             ]);
         });
 
-        const ws1 = XLSX.utils.aoa_to_sheet(aoa);
+        // cellDates:true tells SheetJS to serialize Date objects in our AoA as
+        // real Excel dates (type 'd') rather than coercing them to strings.
+        // dateNF applies the dd/mm/yyyy display format D365 expects.
+        const ws1 = XLSX.utils.aoa_to_sheet(aoa, { cellDates: true, dateNF: 'dd/mm/yyyy' });
+
+        // Post-pass: force every cell in the Start date / End date columns
+        // to be numeric-date (t:'n' with the serial code) + format dd/mm/yyyy.
+        // SheetJS sometimes emits ISO strings (t:'d') which D365 rejects —
+        // converting to the number representation is the portable fix.
+        const START_COL = 5; // column F (0-based)
+        const END_COL   = 6; // column G
+        const HEADER_ROW = 6; // 0-based → Excel row 7
+        for (let r = HEADER_ROW + 1; r < aoa.length; r++) {
+            [START_COL, END_COL].forEach(c => {
+                const addr = XLSX.utils.encode_cell({ r, c });
+                const cell = ws1[addr];
+                if (!cell) return;
+                if (cell.v instanceof Date) {
+                    // Excel date serial: days since 1899-12-30 (Lotus 1-2-3 quirk)
+                    const EPOCH = Date.UTC(1899, 11, 30);
+                    const MS_PER_DAY = 86400000;
+                    cell.v = (cell.v.getTime() - EPOCH) / MS_PER_DAY;
+                    cell.t = 'n';
+                    cell.z = 'dd/mm/yyyy';
+                } else if (typeof cell.v === 'string' && cell.v) {
+                    // Last-resort string → date (dd/mm/yyyy parsed as UK)
+                    const m = cell.v.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+                    if (m) {
+                        const dt = Date.UTC(+m[3], +m[2] - 1, +m[1]);
+                        const EPOCH = Date.UTC(1899, 11, 30);
+                        cell.v = (dt - EPOCH) / 86400000;
+                        cell.t = 'n';
+                        cell.z = 'dd/mm/yyyy';
+                    }
+                }
+            });
+        }
 
         // Column widths tuned to mirror D365's template
         ws1['!cols'] = [
