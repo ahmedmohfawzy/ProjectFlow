@@ -287,48 +287,34 @@
                 cleanCell(formatPredecessors(t.predecessors, taskById, wbsMap)),
                 cleanCell(extras.category),
                 Number(extras.effort) || 0,        // Edm.Decimal
-                toExcelDate(t.start),              // Edm.DateTimeOffset (see post-pass)
-                toExcelDate(t.finish),             // Edm.DateTimeOffset
-                durationDays(t.durationDays),      // Edm.Decimal (days)
+                toExcelDate(t.start),              // real Excel date — paste-friendly into D365 template
+                toExcelDate(t.finish),
+                durationDays(t.durationDays),      // Edm.String "N days"
                 Number(extras.nRes) || 0,          // Edm.Int32
                 cleanCell(extras.role)
             ]);
         });
 
-        // cellDates:true tells SheetJS to serialize Date objects in our AoA as
-        // real Excel dates (type 'd') rather than coercing them to strings.
-        // dateNF applies the dd/mm/yyyy display format D365 expects.
-        const ws1 = XLSX.utils.aoa_to_sheet(aoa, { cellDates: true, dateNF: 'dd/mm/yyyy' });
+        // cellDates:true → Date objects in the AoA become real Excel date
+        // cells (type 'd' / serial number). dateNF sets the display format
+        // only — mm/dd/yyyy per user preference. When the row is pasted
+        // into the D365 template, the target cells override with their own
+        // format, but the underlying serial value D365 reads is unchanged.
+        const ws1 = XLSX.utils.aoa_to_sheet(aoa, { cellDates: true, dateNF: 'mm/dd/yyyy' });
 
-        // Post-pass: force every cell in the Start date / End date columns
-        // to be numeric-date (t:'n' with the serial code) + format dd/mm/yyyy.
-        // SheetJS sometimes emits ISO strings (t:'d') which D365 rejects —
-        // converting to the number representation is the portable fix.
-        const START_COL = 5; // column F (0-based)
-        const END_COL   = 6; // column G
-        const HEADER_ROW = 7; // 0-based → Excel row 8
-        for (let r = HEADER_ROW + 1; r < aoa.length; r++) {
+        // Post-pass: make sure every date cell has format mm/dd/yyyy applied
+        // so that when the file is opened standalone, dates look right.
+        const START_COL = 5; // F
+        const END_COL   = 6; // G
+        const HEADER_ROW_IDX = 7; // 0-based — Excel row 8
+        for (let r = HEADER_ROW_IDX + 1; r < aoa.length; r++) {
             [START_COL, END_COL].forEach(c => {
                 const addr = XLSX.utils.encode_cell({ r, c });
                 const cell = ws1[addr];
                 if (!cell) return;
-                if (cell.v instanceof Date) {
-                    // Excel date serial: days since 1899-12-30 (Lotus 1-2-3 quirk)
-                    const EPOCH = Date.UTC(1899, 11, 30);
-                    const MS_PER_DAY = 86400000;
-                    cell.v = (cell.v.getTime() - EPOCH) / MS_PER_DAY;
-                    cell.t = 'n';
-                    cell.z = 'dd/mm/yyyy';
-                } else if (typeof cell.v === 'string' && cell.v) {
-                    // Last-resort string → date (dd/mm/yyyy parsed as UK)
-                    const m = cell.v.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-                    if (m) {
-                        const dt = Date.UTC(+m[3], +m[2] - 1, +m[1]);
-                        const EPOCH = Date.UTC(1899, 11, 30);
-                        cell.v = (dt - EPOCH) / 86400000;
-                        cell.t = 'n';
-                        cell.z = 'dd/mm/yyyy';
-                    }
+                if (cell.v instanceof Date || cell.t === 'd') {
+                    cell.t = 'd';
+                    cell.z = 'mm/dd/yyyy';
                 }
             });
         }
