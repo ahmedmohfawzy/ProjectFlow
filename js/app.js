@@ -1011,15 +1011,32 @@ import { TeamsBridge } from './teams-bridge.js';
         if (!project) { showToast('error', 'No project loaded'); return; }
         if (typeof XLSX === 'undefined') { showToast('error', 'XLSX library not loaded'); return; }
         if (!window.D365Export) { showToast('error', 'D365 export module missing'); return; }
+
+        // For the Operations template D365 wants its own Project ID (e.g. "PAOM-000361").
+        // Prompt once and remember it on the project for next time.
+        let projId = project.projId || project.d365ProjectId || '';
+        if (mode === 'operations' || mode === 'both') {
+            const entered = prompt(
+                'Enter the D365 Project ID (e.g. PAOM-000361).\nLeave blank if you have not created the project in D365 yet.',
+                projId || ''
+            );
+            if (entered === null) return; // user cancelled
+            projId = (entered || '').trim();
+            if (projId) {
+                project.projId = projId;
+                try { markDirty && markDirty(); } catch (_) {}
+            }
+        }
+
         try {
             if (mode === 'operations') {
-                D365Export.exportOperations(project);
+                D365Export.exportOperations(project, { projId });
                 showToast('success', 'Exported for D365 Project Operations ✓');
             } else if (mode === 'financeOps') {
                 D365Export.exportFinanceOps(project);
                 showToast('success', 'Exported for D365 Project Accounting (F&O) ✓');
             } else if (mode === 'both') {
-                D365Export.exportBoth(project);
+                D365Export.exportBoth(project, { projId });
                 showToast('success', 'Exported both D365 formats ✓');
             } else {
                 showToast('error', 'Unknown D365 export mode');

@@ -123,15 +123,73 @@
     }
 
     // ───────────────────────────────────────────────────────────────────
-    // Schema 1: Project Operations (Dataverse)
-    // Upload path: Power Platform → Data Management → Import
+    // Schema 1: Project Operations — "Work breakdown structure" template
+    // Matches the native Excel template that D365 Project Operations
+    // exports via "Export to Excel" from the project's WBS page.
+    //
+    // Layout (Sheet1):
+    //   A1:  "Work breakdown structure"    (title, bold)
+    //   A4:  "Project ID"     B4: <id>
+    //   A5:  "Project name"   B5: <name>
+    //   Row 7: header row (WBS ID, Task name, Predecessors, Category,
+    //                      Effort in hours, Start date, End date,
+    //                      Duration, Number of resources, Role)
+    //   Row 8+: one row per task
+    //
+    // A second sheet "data_cache" holds the allowed Category / Role
+    // lookup values used for the dropdowns in D365.
     // ───────────────────────────────────────────────────────────────────
 
+    /** Return a safe value for Duration column — D365 expects "Nd" or similar text */
+    function durationText(durationDays) {
+        const d = Number(durationDays);
+        if (!isFinite(d) || d <= 0) return '0 days';
+        return `${d} day${d === 1 ? '' : 's'}`;
+    }
+
     /**
-     * Build the workbook for Project Operations import.
-     * Two sheets that match the exact Dataverse entity column names.
+     * Resolve the role / category / count / effort fields from the task.
+     * Falls back sensibly when fields aren't present on the ProjectFlow task.
      */
-    function buildOperationsWorkbook(project) {
+    function pickTaskExtras(t, project) {
+        const assignments = Array.isArray(t.assignments) ? t.assignments : [];
+        // Number of resources = distinct resource IDs
+        let nRes = assignments.length;
+        if (!nRes && t.resources) {
+            nRes = Array.isArray(t.resources) ? t.resources.length
+                 : String(t.resources).split(/[,;]/).filter(Boolean).length;
+        }
+        // Role — take first assignment's role, or explicit t.role
+        let role = t.role || '';
+        if (!role && assignments.length && project && Array.isArray(project.resources)) {
+            const first = assignments[0];
+            const r = project.resources.find(r => r.id === first.resourceId || r.id === first.resId);
+            if (r) role = r.role || r.group || r.name || '';
+        }
+        // Category — default "Other" (matches D365 msdyn_transactioncategory default)
+        const category = t.category || t.transactionCategory || 'Other';
+        // Effort in hours — prefer explicit effortHours, else cost/8
+        let effort = 0;
+        if (isFinite(Number(t.effortHours))) effort = Number(t.effortHours);
+        else if (isFinite(Number(t.work))) effort = Number(t.work);
+        else effort = costToEffortHours(t.cost);
+        return {
+            nRes,
+            role: role || '',
+            category,
+            effort: Number(effort.toFixed(2))
+        };
+    }
+
+    /**
+     * Build the D365 Project Operations WBS import workbook (matches the
+     * official template the customer's Dynamics tenant exports).
+     *
+     * @param {object}  project   ProjectFlow project
+     * @param {object}  [opts]
+     * @param {string}  [opts.projId]  Optional explicit D365 Project ID (e.g. "PAOM-000361")
+     */
+    function buildOperationsWorkbook(project, opts) {
         if (typeof XLSX === 'undefined') {
             throw new Error('SheetJS (XLSX) is not loaded.');
         }
@@ -143,107 +201,141 @@
         const taskById = new Map();
         tasks.forEach(t => { if (t.id != null) taskById.set(t.id, t); });
 
-        // ─── Sheet 1: msdyn_projects ───────────────────────────────
-        const projectsSheet = [
-            [
-                'msdyn_subject',              // Project name (required)
-                'msdyn_description',          // Description
-                'msdyn_scheduledstart',       // Start (ISO 8601)
-                'msdyn_scheduledend',         // Finish (ISO 8601)
-                'msdyn_projectmanager',       // Manager user email (lookup)
-                'msdyn_customer',             // Customer account name (lookup)
-                'msdyn_totalplannedcost',     // Planned cost
-                'msdyn_overallprojectstatus', // Status code (192350000=OnTrack)
-                'transactioncurrency'         // Currency code (ISO 4217)
-            ],
-            [
-                cleanCell(project.name || 'Untitled Project'),
-                cleanCell(project.description || ''),
-                isoDateTime(project.startDate),
-                isoDateTime(project.finishDate),
-                cleanCell(project.managerEmail || project.manager || ''),
-                cleanCell(project.customer || project.client || ''),
-                Number(project.totalCost || 0),
-                192350000, // OnTrack by default
-                cleanCell(project.currencyCode || 'USD')
-            ]
-        ];
-        const ws1 = XLSX.utils.aoa_to_sheet(projectsSheet);
-        ws1['!cols'] = [
-            {wch:30},{wch:40},{wch:12},{wch:12},{wch:25},{wch:25},{wch:15},{wch:22},{wch:10}
-        ];
-        XLSX.utils.book_append_sheet(wb, ws1, 'msdyn_projects');
-
-        // ─── Sheet 2: msdyn_projecttasks ───────────────────────────
-        const tasksHeader = [
-            'msdyn_subject',                   // Task name (required)
-            'msdyn_project',                   // Parent project name (lookup)
-            'msdyn_wbsid',                     // WBS ID (e.g. "1.2.3")
-            'msdyn_parenttask_wbsid',          // Parent WBS (empty for roots)
-            'msdyn_outlinelevel',              // 0-based level
-            'msdyn_scheduledstart',            // Start (ISO 8601)
-            'msdyn_scheduledend',              // Finish (ISO 8601)
-            'msdyn_scheduleddurationminutes',  // Duration in minutes
-            'msdyn_progress',                  // 0-100
-            'msdyn_iscritical',                // true/false
-            'msdyn_ismilestone',               // true/false
-            'msdyn_effort',                    // Effort hours
-            'msdyn_description',               // Description
-            'msdyn_predecessors_wbsid'         // Comma list of WBS with FS/SS/FF/SF + lag
-        ];
-        const tasksSheet = [tasksHeader];
-        const mpd = project.minutesPerDay || 480;
+        const projId = cleanCell(
+            (opts && opts.projId) || project.projId || project.d365ProjectId || ''
+        );
         const projName = cleanCell(project.name || 'Untitled Project');
+
+        // ─── Sheet 1: "Sheet1" — WBS template ──────────────────────
+        // We build row by row so we can style / merge the header block.
+        const aoa = [];
+
+        // Row 1: title
+        aoa.push(['Work breakdown structure']);
+        // Row 2-3: blank
+        aoa.push([]);
+        aoa.push([]);
+        // Row 4: Project ID label + value
+        aoa.push(['Project ID', projId]);
+        // Row 5: Project name label + value
+        aoa.push(['Project name', projName]);
+        // Row 6: blank
+        aoa.push([]);
+        // Row 7: table header
+        const tableHeader = [
+            'WBS ID',
+            'Task name',
+            'Predecessors',
+            'Category',
+            'Effort in hours',
+            'Start date',
+            'End date',
+            'Duration',
+            'Number of resources',
+            'Role'
+        ];
+        aoa.push(tableHeader);
+
+        // Rows 8+: one row per task (preserves input order so WBS hierarchy is intact)
         tasks.forEach(t => {
             const wbs = wbsMap.get(t.uid) || '';
-            tasksSheet.push([
-                cleanCell(t.name || 'Unnamed Task'),
-                projName,
+            const extras = pickTaskExtras(t, project);
+            aoa.push([
                 cleanCell(wbs),
-                cleanCell(parentWBS(wbs)),
-                Number(t.outlineLevel || 0),
-                isoDateTime(t.start),
-                isoDateTime(t.finish),
-                durationToMinutes(t.durationDays, mpd),
-                Math.max(0, Math.min(100, Number(t.percentComplete || 0))),
-                t.critical ? 'true' : 'false',
-                (t.milestone || Number(t.durationDays) === 0) ? 'true' : 'false',
-                costToEffortHours(t.cost),
-                cleanCell(t.description || ''),
-                cleanCell(formatPredecessors(t.predecessors, taskById, wbsMap))
+                cleanCell(t.name || 'Unnamed Task'),
+                cleanCell(formatPredecessors(t.predecessors, taskById, wbsMap)),
+                cleanCell(extras.category),
+                extras.effort,
+                isoDate(t.start),
+                isoDate(t.finish),
+                durationText(t.durationDays),
+                Number(extras.nRes) || 0,
+                cleanCell(extras.role)
             ]);
         });
-        const ws2 = XLSX.utils.aoa_to_sheet(tasksSheet);
-        ws2['!cols'] = [
-            {wch:35},{wch:25},{wch:10},{wch:10},{wch:8},{wch:12},{wch:12},
-            {wch:10},{wch:8},{wch:8},{wch:8},{wch:8},{wch:40},{wch:20}
-        ];
-        XLSX.utils.book_append_sheet(wb, ws2, 'msdyn_projecttasks');
 
-        // ─── Sheet 3: README (optional help) ──────────────────────
-        const readme = [
-            ['ProjectFlow → D365 Project Operations Export'],
-            [''],
-            ['Upload instructions:'],
-            ['1. Sign in to Power Platform admin center (make.powerapps.com)'],
-            ['2. Open your environment → Solutions → Default Solution'],
-            ['3. Tools → Import data → Excel'],
-            ['4. Choose this file. The tab names match entity logical names.'],
-            ['5. For lookup columns (msdyn_projectmanager, msdyn_customer) D365 will'],
-            ['   match on the email / account-name text provided.'],
-            [''],
-            ['Notes:'],
-            ['• Dates are in ISO-8601 UTC.'],
-            ['• Duration is in minutes. 480 min = 1 working day (8h).'],
-            ['• Status 192350000 = OnTrack, 192350001 = AtRisk, 192350002 = OffTrack.'],
-            ['• Predecessors use format "1.2FS+1d,2.1SS".'],
-            [''],
-            ['Generated: ' + new Date().toISOString()],
-            ['Source:   ProjectFlow™ © Ahmed M. Fawzy']
+        const ws1 = XLSX.utils.aoa_to_sheet(aoa);
+
+        // Column widths tuned to mirror D365's template
+        ws1['!cols'] = [
+            {wch:12}, // WBS ID
+            {wch:40}, // Task name
+            {wch:18}, // Predecessors
+            {wch:18}, // Category
+            {wch:15}, // Effort in hours
+            {wch:12}, // Start date
+            {wch:12}, // End date
+            {wch:12}, // Duration
+            {wch:20}, // Number of resources
+            {wch:22}  // Role
         ];
-        const ws3 = XLSX.utils.aoa_to_sheet(readme);
-        ws3['!cols'] = [{wch:70}];
-        XLSX.utils.book_append_sheet(wb, ws3, 'README');
+
+        // Style: bold title + bold header row + bold label cells
+        // (SheetJS Community Edition honours these style hints in most viewers)
+        const boldStyle   = { font: { bold: true, sz: 14 } };
+        const labelStyle  = { font: { bold: true }, fill: { fgColor: { rgb: 'DEEBF7' } } };
+        const headerStyle = { font: { bold: true }, fill: { fgColor: { rgb: 'DEEBF7' } } };
+
+        if (ws1['A1']) ws1['A1'].s = boldStyle;
+        ['A4', 'A5'].forEach(addr => { if (ws1[addr]) ws1[addr].s = labelStyle; });
+        // Header row (row index 7 → Excel row number 7 → 0-based col index)
+        for (let c = 0; c < tableHeader.length; c++) {
+            const addr = XLSX.utils.encode_cell({ r: 6, c });
+            if (ws1[addr]) ws1[addr].s = headerStyle;
+        }
+
+        // Merge the title across the full width of the table
+        ws1['!merges'] = [
+            { s: { r: 0, c: 0 }, e: { r: 0, c: tableHeader.length - 1 } }
+        ];
+
+        // Auto-filter on the header row so it behaves like D365's template
+        const lastCol = XLSX.utils.encode_col(tableHeader.length - 1);
+        ws1['!autofilter'] = { ref: `A7:${lastCol}${aoa.length}` };
+
+        XLSX.utils.book_append_sheet(wb, ws1, 'Sheet1');
+
+        // ─── Sheet 2: data_cache (dropdown lookup values) ──────────
+        // D365's template uses this hidden sheet to back data-validation
+        // dropdowns. Populating it with safe defaults lets the uploaded
+        // file open cleanly in Excel/D365 even when the user never touches
+        // it.  Users can edit the values to match their Dynamics tenant.
+        const categories = [
+            'Other',
+            'Consulting',
+            'Development',
+            'Design',
+            'Testing',
+            'Training',
+            'Documentation',
+            'Project management',
+            'Support',
+            'Installation',
+            'Analysis'
+        ];
+        const roles = [
+            'Project Manager',
+            'Business Analyst',
+            'Solution Architect',
+            'Developer',
+            'Senior Developer',
+            'Tester',
+            'QA Engineer',
+            'Consultant',
+            'Technical Lead',
+            'Designer',
+            'Trainer',
+            'Support Engineer'
+        ];
+        // Build a 2-column sheet: Category | Role
+        const cache = [['Category', 'Role']];
+        const nRows = Math.max(categories.length, roles.length);
+        for (let i = 0; i < nRows; i++) {
+            cache.push([categories[i] || '', roles[i] || '']);
+        }
+        const ws2 = XLSX.utils.aoa_to_sheet(cache);
+        ws2['!cols'] = [{ wch: 24 }, { wch: 24 }];
+        XLSX.utils.book_append_sheet(wb, ws2, 'data_cache');
 
         return wb;
     }
@@ -407,10 +499,10 @@
         XLSX.writeFile(wb, filename);
     }
 
-    /** Export → D365 Project Operations (Dataverse) */
-    function exportOperations(project) {
-        const wb = buildOperationsWorkbook(project);
-        _download(wb, _filename(project, 'D365-ProjectOps'));
+    /** Export → D365 Project Operations (WBS template) */
+    function exportOperations(project, opts) {
+        const wb = buildOperationsWorkbook(project, opts || {});
+        _download(wb, _filename(project, 'D365-WBS'));
         return true;
     }
 
@@ -422,8 +514,8 @@
     }
 
     /** Export both flavours (two sequential downloads) */
-    function exportBoth(project) {
-        exportOperations(project);
+    function exportBoth(project, opts) {
+        exportOperations(project, opts);
         // small delay so some browsers don't drop the second download
         setTimeout(() => exportFinanceOps(project), 400);
         return true;
