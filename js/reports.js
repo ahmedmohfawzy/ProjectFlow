@@ -1563,8 +1563,8 @@
     //  PORTFOLIO PDF REPORT — Enterprise Multi-Page
     // ══════════════════════════════════════════════════════
     async function generatePortfolioPDF(projects, settings) {
-        if (typeof jspdf === 'undefined') throw new Error('jsPDF not loaded');
-        var pdf = new jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+        if (typeof window.jspdf === 'undefined') throw new Error('jsPDF not loaded');
+        var pdf = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
         var W = 297, H = 210, M = 14;
         var cur = (settings && settings.currency) || '$';
         var today = new Date(); today.setHours(0,0,0,0);
