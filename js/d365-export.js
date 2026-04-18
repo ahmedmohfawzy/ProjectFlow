@@ -306,7 +306,7 @@
         // converting to the number representation is the portable fix.
         const START_COL = 5; // column F (0-based)
         const END_COL   = 6; // column G
-        const HEADER_ROW = 6; // 0-based → Excel row 7
+        const HEADER_ROW = 7; // 0-based → Excel row 8
         for (let r = HEADER_ROW + 1; r < aoa.length; r++) {
             [START_COL, END_COL].forEach(c => {
                 const addr = XLSX.utils.encode_cell({ r, c });
@@ -353,22 +353,27 @@
         const labelStyle  = { font: { bold: true }, fill: { fgColor: { rgb: 'DEEBF7' } } };
         const headerStyle = { font: { bold: true }, fill: { fgColor: { rgb: 'DEEBF7' } } };
 
-        if (ws1['A1']) ws1['A1'].s = boldStyle;
-        ['A4', 'A5'].forEach(addr => { if (ws1[addr]) ws1[addr].s = labelStyle; });
-        // Header row (row index 7 → Excel row number 7 → 0-based col index)
+        if (ws1['A2']) ws1['A2'].s = boldStyle;
+        ['A5', 'A6'].forEach(addr => { if (ws1[addr]) ws1[addr].s = labelStyle; });
+        // Header row (Excel row 8 → 0-based row index 7)
         for (let c = 0; c < tableHeader.length; c++) {
-            const addr = XLSX.utils.encode_cell({ r: 6, c });
+            const addr = XLSX.utils.encode_cell({ r: 7, c });
             if (ws1[addr]) ws1[addr].s = headerStyle;
         }
 
-        // Merge the title across the full width of the table
+        // Merge the title across the full width of the table (row 2)
         ws1['!merges'] = [
-            { s: { r: 0, c: 0 }, e: { r: 0, c: tableHeader.length - 1 } }
+            { s: { r: 1, c: 0 }, e: { r: 1, c: tableHeader.length - 1 } }
         ];
 
-        // Auto-filter on the header row so it behaves like D365's template
+        // Auto-filter on the header row so it behaves like D365's template.
+        // NOTE: D365's own template defines a real Excel Table named "Table1"
+        // with range A8:J148. SheetJS Community cannot write table parts, so
+        // we fall back to autofilter. The reliable workflow is: download the
+        // empty D365 template, copy the data rows from this file, paste into
+        // the existing Table1 in the D365 template, then upload.
         const lastCol = XLSX.utils.encode_col(tableHeader.length - 1);
-        ws1['!autofilter'] = { ref: `A7:${lastCol}${aoa.length}` };
+        ws1['!autofilter'] = { ref: `A8:${lastCol}${aoa.length}` };
 
         XLSX.utils.book_append_sheet(wb, ws1, 'Sheet1');
 
