@@ -58,11 +58,7 @@ import{t as e}from"./PublicClientApplication-D80GVUWi.js";var t={};function n(e,
             margin: 0 auto;
             padding: 0;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        `;function r(e,t){let r=n.querySelector(`.wizard-status`);r||(r=document.createElement(`div`),r.className=`wizard-status`,r.style.cssText=`padding:10px;border-radius:8px;margin:12px 0;font-size:13px;text-align:center;`,n.appendChild(r)),r.textContent=e,r.style.background=t===`error`?`rgba(239,68,68,0.15)`:t===`success`?`rgba(34,197,94,0.15)`:`rgba(59,130,246,0.15)`,r.style.color=t===`error`?`#f87171`:t===`success`?`#4ade80`:`#60a5fa`}async function i(){n.innerHTML=``;let e=document.createElement(`div`);if(e.style.cssText=`text-align:center;margin-bottom:20px;`,e.innerHTML=`
-                <div style="font-size:2rem;margin-bottom:8px;">📋</div>
-                <h3 style="margin:0 0 4px 0;font-size:1.1rem;">Connect to Microsoft Planner</h3>
-                <p style="margin:0;font-size:0.8rem;color:var(--text-muted,#888);">Sign in with your Microsoft account to load your plans</p>
-            `,n.appendChild(e),r(`⏳ Initializing...`,`info`),!await ei()){r(`❌ Failed to initialize. Please refresh the page.`,`error`);return}Er()?(r(`✅ Already signed in`,`success`),await o()):(n.querySelector(`.wizard-status`)?.remove(),a())}function a(){let e=`<svg viewBox="0 0 21 21" fill="none" width="20" height="20" style="vertical-align:middle;margin-right:10px;flex-shrink:0">
+        `;function r(e,t){let r=n.querySelector(`.wizard-status`);r||(r=document.createElement(`div`),r.className=`wizard-status`,r.style.cssText=`padding:10px;border-radius:8px;margin:12px 0;font-size:13px;text-align:center;`,n.appendChild(r)),r.textContent=e,r.style.background=t===`error`?`rgba(239,68,68,0.15)`:t===`success`?`rgba(34,197,94,0.15)`:`rgba(59,130,246,0.15)`,r.style.color=t===`error`?`#f87171`:t===`success`?`#4ade80`:`#60a5fa`}async function i(){if(n.innerHTML=``,r(`⏳ Initializing...`,`info`),!await ei()){r(`❌ Failed to initialize. Please refresh the page.`,`error`);return}Er()?(r(`✅ Already signed in`,`success`),await o()):(n.querySelector(`.wizard-status`)?.remove(),a())}function a(){let e=`<svg viewBox="0 0 21 21" fill="none" width="20" height="20" style="vertical-align:middle;margin-right:10px;flex-shrink:0">
                 <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
                 <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
                 <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
