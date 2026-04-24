@@ -472,11 +472,30 @@ function _getMsal() {
             const categoryDescriptions = planDetailsData.categoryDescriptions || {};
 
             // ── Auto-detect Dataverse info for hierarchy ──
+            // Check first whether this is a Premium plan so we can warn if hierarchy fails
+            const hasPremiumTasks = allTasks.some(t => {
+                const sid = t.creationSource?.contextScenarioId || '';
+                return sid === 'com.microsoft.project.plannerIntegration'
+                    || sid.includes('plannerIntegration')
+                    || sid.includes('projectIntegration');
+            });
+
             let dataverseHierarchy = null;
+            let dvHierarchyWarning = null;
             try {
                 dataverseHierarchy = await _fetchDataverseHierarchy(allTasks);
+                if (!dataverseHierarchy && hasPremiumTasks) {
+                    dvHierarchyWarning = 'Planner Premium plan detected but task hierarchy could not be loaded from Dataverse. '
+                        + 'Tasks will appear flat. Open browser DevTools (F12 → Console) for details. '
+                        + 'An admin may need to grant Dataverse consent for this app.';
+                    console.error('[MSGraph] ⚠️ Premium plan hierarchy FAILED to load. Admin consent URL:');
+                    console.error(`https://login.microsoftonline.com/organizations/adminconsent?client_id=5c5eccbf-b7fb-4041-b969-44da0d6cf406&redirect_uri=${encodeURIComponent(window.location.origin + window.location.pathname)}`);
+                }
             } catch (dvErr) {
                 console.warn('[MSGraph] Dataverse hierarchy fetch failed (non-fatal):', dvErr.message);
+                if (hasPremiumTasks) {
+                    dvHierarchyWarning = `Hierarchy load failed: ${dvErr.message}. Tasks will appear flat.`;
+                }
             }
 
             return {
@@ -490,6 +509,7 @@ function _getMsal() {
                 tasks: allTasks,
                 categoryDescriptions,
                 dataverseHierarchy,
+                dvHierarchyWarning,
             };
         } catch (err) {
             throw new Error(`getPlanDetails failed: ${err.message}`);
@@ -501,9 +521,17 @@ function _getMsal() {
      * Returns a Map<plannerTaskId, { outlineLevel, wbsId, parentTaskId }> or null.
      */
     async function _fetchDataverseHierarchy(tasks) {
-        // Find a task with creationSource containing Dataverse info
-        const sampleTask = tasks.find(t => 
-            t.creationSource?.contextScenarioId === 'com.microsoft.project.plannerIntegration'
+        // Find a task with creationSource containing Dataverse info.
+        // Match flexibly: exact value OR any ID containing 'plannerIntegration' / 'projectIntegration'
+        // (guards against minor Microsoft value changes across tenants/versions)
+        const _isPremiumScenario = (sid) => {
+            if (!sid) return false;
+            return sid === 'com.microsoft.project.plannerIntegration'
+                || sid.includes('plannerIntegration')
+                || sid.includes('projectIntegration');
+        };
+        const sampleTask = tasks.find(t =>
+            _isPremiumScenario(t.creationSource?.contextScenarioId)
             && t.creationSource?.externalObjectVersion
         );
         if (!sampleTask) {
@@ -1510,7 +1538,8 @@ function _getMsal() {
                 wbsId = dvInfo.wbsId || '';
                 
                 // Check if this task's Dataverse ID appears as a parent
-                const dvTaskId = task.creationSource?.externalObjectId?.split('|')[2];
+                // NOTE: parentTaskIds stores lowercase UUIDs — must lowercase before lookup
+                const dvTaskId = task.creationSource?.externalObjectId?.split('|')[2]?.toLowerCase();
                 isSummary = dvTaskId ? parentTaskIds.has(dvTaskId) : false;
 
                 // Override dates from Dataverse (more accurate for premium plans)
@@ -1723,7 +1752,7 @@ function _getMsal() {
 
     async function importPlan(planId) {
         try {
-            const { plan, buckets, tasks, categoryDescriptions, dataverseHierarchy } = await getPlanDetails(planId);
+            const { plan, buckets, tasks, categoryDescriptions, dataverseHierarchy, dvHierarchyWarning } = await getPlanDetails(planId);
 
             // ── Fetch ALL task details via $batch (20 per HTTP call, much faster than N individual calls) ──
             // Run batch groups in parallel (5 concurrent) for large projects
@@ -1835,6 +1864,11 @@ function _getMsal() {
             });
 
             const project = plannerToProject(plan, buckets, tasks, taskDetailsMap, userIdToName, categoryDescriptions, dataverseHierarchy);
+
+            // Attach hierarchy warning so app.js can show a visible toast to the user
+            if (dvHierarchyWarning) {
+                project._dvHierarchyWarning = dvHierarchyWarning;
+            }
 
             // ── DEBUG: Log what plannerToProject produced ──
             console.log('[MSGraph DEBUG] plannerToProject result:', {
