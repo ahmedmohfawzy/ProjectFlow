@@ -537,7 +537,8 @@ function _getMsal() {
         tasks.forEach(t => {
             if (t.creationSource?.externalObjectId) {
                 const parts = t.creationSource.externalObjectId.split('|');
-                const dvTaskId = parts[2]; // Third part is the Dataverse task GUID
+                // The task ID might be at parts[2], or parts could be shorter. Handle gracefully:
+                const dvTaskId = (parts.length >= 3 ? parts[2] : parts[parts.length - 1])?.toLowerCase();
                 if (dvTaskId) {
                     plannerToDataverse.set(t.id, dvTaskId);
                 }
@@ -683,10 +684,11 @@ function _getMsal() {
             // Build comprehensive result
             const dvMap = new Map();
             dvTasks.forEach(dvt => {
-                dvMap.set(dvt.msdyn_projecttaskid, {
+                const taskId = (dvt.msdyn_projecttaskid || '').toLowerCase();
+                dvMap.set(taskId, {
                     outlineLevel: dvt.msdyn_outlinelevel || 1,
                     wbsId: dvt.msdyn_wbsid || '', // use Dataverse WBS directly when available
-                    parentTaskId: dvt._msdyn_parenttask_value || null,
+                    parentTaskId: dvt._msdyn_parenttask_value ? dvt._msdyn_parenttask_value.toLowerCase() : null,
                     subject: dvt.msdyn_subject,
                     scheduledStart: dvt.msdyn_scheduledstart || null,
                     scheduledEnd: dvt.msdyn_scheduledend || null,
@@ -1540,6 +1542,9 @@ function _getMsal() {
             // otherwise count working days (Mon–Fri) between the final start/finish.
             const finalDur = _dvDurationDays(dvInfo?.duration, startDate, finishDate);
 
+            const extParts = task.creationSource?.externalObjectId ? task.creationSource.externalObjectId.split('|') : [];
+            const dvTaskIdStr = extParts.length >= 3 ? extParts[2] : (extParts.length > 0 ? extParts[extParts.length - 1] : null);
+
             project.tasks.push({
                 uid:            taskUid,
                 id:             taskUid,
@@ -1565,7 +1570,7 @@ function _getMsal() {
                 _plannerBucketId: task.bucketId,
                 _plannerBucketName: bucketNameMap.get(task.bucketId) || '',
                 _plannerAssigneeIds: Object.keys(task.assignments || {}),
-                _dvTaskId:        dvInfo ? (task.creationSource?.externalObjectId?.split('|')[2] || null) : null,
+                _dvTaskId:        dvInfo && dvTaskIdStr ? dvTaskIdStr.toLowerCase() : null,
             });
         });
 
