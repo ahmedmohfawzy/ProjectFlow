@@ -982,8 +982,8 @@ function _getMsal() {
     async function listDataverseProjects(dataverseUrl) {
         const token = await _getDataverseToken(dataverseUrl);
         const url = `${dataverseUrl}/api/data/v9.2/msdyn_projects`
-            + `?$select=msdyn_projectid,msdyn_subject,msdyn_scheduledstart,msdyn_scheduledend,msdyn_description`
-            + `&$orderby=msdyn_scheduledstart desc`
+            + `?$select=msdyn_projectid,msdyn_subject,msdyn_description`
+            + `&$orderby=msdyn_subject asc`
             + `&$top=50`;
 
         const response = await fetch(url, {
