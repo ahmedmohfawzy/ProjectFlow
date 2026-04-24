@@ -36,7 +36,9 @@
         if (!d) return '';
         const date = (d instanceof Date) ? d : new Date(d);
         if (isNaN(date.getTime())) return '';
-        return date.toISOString().split('T')[0]; // YYYY-MM-DD
+        const mm = String(date.getMonth() + 1).padStart(2, '0');
+        const dd = String(date.getDate()).padStart(2, '0');
+        return `${date.getFullYear()}-${mm}-${dd}`;
     }
 
     /** dd/mm/yyyy for the Project Operations WBS template (matches the
@@ -45,9 +47,9 @@
         if (!d) return '';
         const date = (d instanceof Date) ? d : new Date(d);
         if (isNaN(date.getTime())) return '';
-        const dd = String(date.getUTCDate()).padStart(2, '0');
-        const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
-        const yyyy = date.getUTCFullYear();
+        const dd = String(date.getDate()).padStart(2, '0');
+        const mm = String(date.getMonth() + 1).padStart(2, '0');
+        const yyyy = date.getFullYear();
         return `${dd}/${mm}/${yyyy}`;
     }
 
@@ -61,13 +63,13 @@
         if (!d) return '';
         const date = (d instanceof Date) ? d : new Date(d);
         if (isNaN(date.getTime())) return '';
-        // Normalize to a UTC-midnight Date so Excel's epoch conversion is stable
-        return new Date(Date.UTC(
-            date.getUTCFullYear(),
-            date.getUTCMonth(),
-            date.getUTCDate(),
+        // Normalize to a local-midnight Date so Excel's epoch conversion is stable
+        return new Date(
+            date.getFullYear(),
+            date.getMonth(),
+            date.getDate(),
             0, 0, 0, 0
-        ));
+        );
     }
 
     /** Full ISO datetime (F&O often wants time component) */
@@ -75,7 +77,16 @@
         if (!d) return '';
         const date = (d instanceof Date) ? d : new Date(d);
         if (isNaN(date.getTime())) return '';
-        return date.toISOString(); // YYYY-MM-DDTHH:mm:ss.sssZ
+        const tz = date.getTimezoneOffset();
+        const tzh = String(Math.abs(Math.floor(tz / 60))).padStart(2, '0');
+        const tzm = String(Math.abs(tz % 60)).padStart(2, '0');
+        const sign = tz > 0 ? '-' : '+';
+        const mm = String(date.getMonth() + 1).padStart(2, '0');
+        const dd = String(date.getDate()).padStart(2, '0');
+        const hh = String(date.getHours()).padStart(2, '0');
+        const min = String(date.getMinutes()).padStart(2, '0');
+        const ss = String(date.getSeconds()).padStart(2, '0');
+        return `${date.getFullYear()}-${mm}-${dd}T${hh}:${min}:${ss}${sign}${tzh}:${tzm}`;
     }
 
     /** Convert duration (days) → minutes for Dataverse msdyn_scheduleddurationminutes */
@@ -132,7 +143,10 @@
         parts.forEach(p => {
             // match e.g. "3FS+2d", "5SS", "7", "3FS-1d"
             const m = p.match(/^(\d+)\s*(FS|SS|FF|SF)?\s*([+-]?\d+)?\s*([dhw]?)/i);
-            if (!m) return;
+            if (!m) {
+                console.warn(`[D365 Export] Skipping malformed predecessor: "${p}" on task UID ${predsRaw}`);
+                return;
+            }
             const predId = Number(m[1]);
             const type = (m[2] || 'FS').toUpperCase();
             const lag = m[3] || '';

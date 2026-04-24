@@ -251,6 +251,7 @@
         if (!val) return null;
         if (val instanceof Date) return isNaN(val.getTime()) ? null : val;
         if (typeof val === 'number') {
+            if (val < 10000) return null; // Ignore durations/small numbers erroneously passed
             // P1 #30: Excel serial date with 1900 leap-year bug correction
             // Excel treats 1900 as leap year (it wasn't), so serial > 59 is off by 1
             const adjusted = val > 59 ? val - 1 : val;

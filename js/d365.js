@@ -420,8 +420,8 @@
         try {
             if (config.mode === MODES.OPERATIONS) {
                 const query = '$select=msdyn_projectid,msdyn_subject,msdyn_scheduledstart,msdyn_scheduledend,msdyn_description,msdyn_projectmanager_displayname,msdyn_overallprojectstatus,msdyn_totalplannedcost,msdyn_totalactualsales&$orderby=msdyn_subject';
-                const result = await _callDataverse('GET', ENTITIES.PROJECTS_OPS, query);
-                return result.value.map(_mapProjectOps);
+                const allProjects = await fetchAllPages(ENTITIES.PROJECTS_OPS, query);
+                return allProjects.map(_mapProjectOps);
             } else {
                 const query = '$select=ProjId,Name,ProjType,Status,StartDate,EndDate,CustAccount,SalesPrice&$orderby=Name';
                 const result = await _callFO('GET', ENTITIES.PROJECTS_FO, query);
@@ -442,8 +442,8 @@
         try {
             if (config.mode === MODES.OPERATIONS) {
                 const query = `$filter=_msdyn_project_value eq (${projectId})&$select=msdyn_projecttaskid,msdyn_subject,msdyn_scheduledstart,msdyn_scheduledend,msdyn_scheduleddurationminutes,msdyn_progress,msdyn_effort,msdyn_effortcompleted,msdyn_iscritical,msdyn_outlinelevel,msdyn_ismilestone,msdyn_displaysequence,msdyn_description&$orderby=msdyn_displaysequence asc`;
-                const result = await _callDataverse('GET', ENTITIES.TASKS_OPS, query);
-                return result.value.map(_mapTaskOps);
+                const allTasks = await fetchAllPages(ENTITIES.TASKS_OPS, query);
+                return allTasks.map(_mapTaskOps);
             } else {
                 const query = `$filter=ProjId eq '${projectId}'&$select=ActivityNumber,Description,FromDate,ToDate,Status,CostPrice,SalesPrice`;
                 const result = await _callFO('GET', ENTITIES.ACTIVITIES_FO, query);
@@ -464,8 +464,8 @@
         try {
             if (config.mode === MODES.OPERATIONS) {
                 const query = '$select=bookableresourceid,name,resourcetype';
-                const result = await _callDataverse('GET', ENTITIES.RESOURCES_OPS, query);
-                return result.value.map(r => ({
+                const allResources = await fetchAllPages(ENTITIES.RESOURCES_OPS, query);
+                return allResources.map(r => ({
                     id: r.bookableresourceid,
                     name: r.name,
                     type: r.resourcetype || 'User'

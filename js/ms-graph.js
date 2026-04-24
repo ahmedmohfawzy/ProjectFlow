@@ -808,7 +808,7 @@ function _getMsal() {
             return result;
         } catch (fetchErr) {
             console.warn('[MSGraph] Dataverse fetch error:', fetchErr.message);
-            return null;
+            throw fetchErr;
         }
     }
 
@@ -1240,7 +1240,11 @@ function _getMsal() {
                             type: TYPE_CODES[linkName] ?? 1,
                             typeName: linkName,
                         });
+                    } else {
+                        console.warn('[MSGraph] Orphaned dependency successor missing for dep:', dep.msdyn_projectdependencyid);
                     }
+                } else {
+                    console.warn('[MSGraph] Orphaned dependency endpoints missing for dep:', dep.msdyn_projectdependencyid);
                 }
             });
 
@@ -1272,18 +1276,23 @@ function _getMsal() {
      */
     async function _batchCall(requests, retryCount = 0) {
         const token = await _getAccessToken();
-        const response = await fetch(`${GRAPH_ENDPOINT}/$batch`, {
-            method:  'POST',
-            headers: {
-                Authorization:  `Bearer ${token}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ requests }),
-            signal: AbortSignal.timeout(30000),
-        });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-        // Handle 429 Rate Limit on $batch endpoint
-        if (response.status === 429) {
+        try {
+            const response = await fetch(`${GRAPH_ENDPOINT}/$batch`, {
+                method:  'POST',
+                headers: {
+                    Authorization:  `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ requests }),
+                signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+
+            // Handle 429 Rate Limit on $batch endpoint
+            if (response.status === 429) {
             const MAX_RETRIES = 3;
             if (retryCount >= MAX_RETRIES) {
                 throw new Error(`$batch rate limit exceeded after ${MAX_RETRIES} retries.`);
@@ -1303,6 +1312,10 @@ function _getMsal() {
         // Return responses sorted by id so callers can zip with original requests
         const map = Object.fromEntries((result.responses || []).map(r => [r.id, r]));
         return requests.map(req => map[req.id] || { id: req.id, status: 500, body: null });
+        } catch (err) {
+            clearTimeout(timeoutId);
+            throw err;
+        }
     }
 
     /**
@@ -1836,20 +1849,20 @@ function _getMsal() {
                         });
                     }
                 });
-                console.log('[MSGraph DEBUG] Assignment analysis:', {
+                /* console.log('[MSGraph DEBUG] Assignment analysis:', {
                     tasksWithAssignments: tasks.filter(t => t.assignments && Object.keys(t.assignments).length > 0).length,
                     totalTasks: tasks.length,
                     unresolvedUserIds: allUserIds.size,
                     userIdsFromGroupMembers: Object.keys(userIdToName).length,
                     sampleAssignments: tasks.slice(0, 3).map(t => ({ title: t.title, assignments: t.assignments })),
-                });
+                }); */
                 if (allUserIds.size > 0) {
                     await _resolveUserDisplayNames([...allUserIds]);
                     allUserIds.forEach(id => {
                         const name = _userCache.get(id);
                         if (name) userIdToName[id] = name;
                     });
-                    console.log('[MSGraph DEBUG] After batch resolve, userIdToName:', { ...userIdToName });
+                    // console.log('[MSGraph DEBUG] After batch resolve, userIdToName:', { ...userIdToName });
                 }
 
                 // Populate plan cache so future pulls skip this work
@@ -1857,7 +1870,7 @@ function _getMsal() {
             }
 
             // ── DEBUG: Log what we're passing to plannerToProject ──
-            console.log('[MSGraph DEBUG] importPlan data:', {
+            /* console.log('[MSGraph DEBUG] importPlan data:', {
                 planTitle: plan.title,
                 bucketsCount: buckets.length,
                 tasksCount: tasks.length,
@@ -1872,7 +1885,7 @@ function _getMsal() {
                     hasAssignments: !!(t.assignments && Object.keys(t.assignments).length > 0),
                     assignmentCount: t.assignments ? Object.keys(t.assignments).length : 0,
                 })),
-            });
+            }); */
 
             const project = plannerToProject(plan, buckets, tasks, taskDetailsMap, userIdToName, categoryDescriptions, dataverseHierarchy);
 
@@ -1882,7 +1895,7 @@ function _getMsal() {
             }
 
             // ── DEBUG: Log what plannerToProject produced ──
-            console.log('[MSGraph DEBUG] plannerToProject result:', {
+            /* console.log('[MSGraph DEBUG] plannerToProject result:', {
                 tasksCount: project.tasks.length,
                 resourcesCount: project.resources.length,
                 assignmentsCount: project.assignments.length,
@@ -1891,7 +1904,7 @@ function _getMsal() {
                     resourceNames: t.resourceNames,
                 })),
                 resources: project.resources,
-            });
+            }); */
 
             // Seed the delta token so the first auto-pull only fetches *changes* from this point
             // (runs in background — don't await; a failure here just means first pull is a full fetch)
