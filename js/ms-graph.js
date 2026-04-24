@@ -620,7 +620,7 @@ function _getMsal() {
                 Prefer: 'odata.include-annotations="OData.Community.Display.V1.FormattedValue"',
             };
 
-            // 1. Fetch tasks with ALL fields including msdyn_wbsid for correct WBS order
+            // 1. Fetch tasks, excluding fields that don't exist in all Dataverse environments (e.g. msdyn_wbsid)
             const tasksUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projecttasks`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
                 + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_displaysequence,`
@@ -723,7 +723,7 @@ function _getMsal() {
                     duration: dvt.msdyn_duration || 0,
                     progress: dvt.msdyn_progress || 0,
                     effort: dvt.msdyn_effort || 0,
-                    priority: dvt.msdyn_priority || null,
+                    priority: null,
                     description: dvt.msdyn_description || '',
                     dvPredecessors: [], // populated below from dependencies
                 });

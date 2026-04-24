@@ -443,10 +443,7 @@
             if (config.mode === MODES.OPERATIONS) {
                 const query = `$filter=_msdyn_project_value eq (${projectId})&$select=msdyn_projecttaskid,msdyn_subject,msdyn_scheduledstart,msdyn_scheduledend,msdyn_scheduleddurationminutes,msdyn_progress,msdyn_effort,msdyn_effortcompleted,msdyn_iscritical,msdyn_outlinelevel,msdyn_ismilestone,msdyn_displaysequence,msdyn_description&$orderby=msdyn_displaysequence asc`;
                 const result = await _callDataverse('GET', ENTITIES.TASKS_OPS, query);
-                return result.value.map(_mapTaskOps).sort((a, b) => {
-                    if (a.outlineLevel !== b.outlineLevel) return a.outlineLevel - b.outlineLevel;
-                    return (a.wbsId || '').localeCompare(b.wbsId || '');
-                });
+                return result.value.map(_mapTaskOps);
             } else {
                 const query = `$filter=ProjId eq '${projectId}'&$select=ActivityNumber,Description,FromDate,ToDate,Status,CostPrice,SalesPrice`;
                 const result = await _callFO('GET', ENTITIES.ACTIVITIES_FO, query);
