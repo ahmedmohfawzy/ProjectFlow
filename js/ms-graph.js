@@ -623,9 +623,9 @@ function _getMsal() {
             // 1. Fetch tasks with ALL fields including msdyn_wbsid for correct WBS order
             const tasksUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projecttasks`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
-                + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_wbsid,`
+                + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,`
                 + `_msdyn_parenttask_value,msdyn_scheduledstart,msdyn_scheduledend,`
-                + `msdyn_duration,msdyn_progress,msdyn_effort,msdyn_priority,msdyn_description`
+                + `msdyn_duration,msdyn_progress,msdyn_effort,msdyn_description`
                 + `&$orderby=msdyn_scheduledstart asc`
                 + `&$top=500`;
 
@@ -1028,9 +1028,9 @@ function _getMsal() {
         const [tasksResp, assignResp, teamResp, depResp] = await Promise.all([
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projecttasks`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
-                + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_wbsid,`
+                + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,`
                 + `_msdyn_parenttask_value,msdyn_scheduledstart,msdyn_scheduledend,`
-                + `msdyn_duration,msdyn_progress,msdyn_effort,msdyn_priority,msdyn_description`
+                + `msdyn_duration,msdyn_progress,msdyn_effort,msdyn_description`
                 + `&$orderby=msdyn_scheduledstart asc&$top=500`,
                 { method: 'GET', headers: dvHeaders }),
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_resourceassignments`
