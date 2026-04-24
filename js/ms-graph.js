@@ -625,7 +625,7 @@ function _getMsal() {
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
                 + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_displaysequence,`
                 + `_msdyn_parenttask_value,msdyn_scheduledstart,msdyn_scheduledend,`
-                + `msdyn_duration,msdyn_scheduleddurationminutes,msdyn_progress,msdyn_effort,msdyn_description`
+                + `msdyn_duration,msdyn_progress,msdyn_effort,msdyn_description`
                 + `&$orderby=msdyn_displaysequence asc`
                 + `&$top=500`;
 
@@ -1024,7 +1024,7 @@ function _getMsal() {
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
                 + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_displaysequence,`
                 + `_msdyn_parenttask_value,msdyn_scheduledstart,msdyn_scheduledend,`
-                + `msdyn_duration,msdyn_scheduleddurationminutes,msdyn_progress,msdyn_effort,msdyn_description`
+                + `msdyn_duration,msdyn_progress,msdyn_effort,msdyn_description`
                 + `&$orderby=msdyn_displaysequence asc&$top=500`,
                 { method: 'GET', headers: dvHeaders }),
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_resourceassignments`
