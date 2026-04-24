@@ -251,7 +251,7 @@
         const tasks = Array.isArray(project.tasks) ? project.tasks : [];
         const wbsMap = buildWBSIndex(tasks);
         const taskById = new Map();
-        tasks.forEach(t => { if (t.id != null) taskById.set(t.id, t); });
+        tasks.forEach(t => { if (t.uid != null) taskById.set(t.uid, t); });
 
         const projId = cleanCell(
             (opts && opts.projId) || project.projId || project.d365ProjectId || ''

@@ -1134,11 +1134,11 @@ function _getMsal() {
             return 0;
         });
 
-        // Build resources list
         const resourceSet = new Map();
         let resUid = 1;
         resNameMap.forEach((name, id) => {
-            resourceSet.set(id, { uid: resUid++, id: resUid, name, maxUnits: 100 });
+            const u = resUid++;
+            resourceSet.set(id, { uid: u, id: u, name, maxUnits: 100 });
         });
 
         // Build project
@@ -1439,8 +1439,15 @@ function _getMsal() {
             console.log(`[MSGraph] Using Dataverse hierarchy for ${dataverseHierarchy.size} tasks`);
             // Sort by WBS ID (e.g., "1", "1.1", "1.2", "2", "2.1") 
             sortedTasks = [...tasks].sort((a, b) => {
-                const ha = dataverseHierarchy.get(a.id);
-                const hb = dataverseHierarchy.get(b.id);
+                const extA = a.creationSource?.externalObjectId ? a.creationSource.externalObjectId.split('|') : [];
+                const dvIdA = extA.length >= 3 ? extA[2].toLowerCase() : (extA.length > 0 ? extA[extA.length - 1].toLowerCase() : null);
+                
+                const extB = b.creationSource?.externalObjectId ? b.creationSource.externalObjectId.split('|') : [];
+                const dvIdB = extB.length >= 3 ? extB[2].toLowerCase() : (extB.length > 0 ? extB[extB.length - 1].toLowerCase() : null);
+
+                const ha = dvIdA ? dataverseHierarchy.get(dvIdA) : null;
+                const hb = dvIdB ? dataverseHierarchy.get(dvIdB) : null;
+                
                 if (!ha && !hb) return 0;
                 if (!ha) return 1;
                 if (!hb) return -1;

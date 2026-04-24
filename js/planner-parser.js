@@ -165,9 +165,12 @@
             const tNum = String(getVal(row, 'taskNum') || '');
             const tUID = uidSeq++;
             if (tNum) taskNumMap.set(tNum, tUID);
+            
+            // Allow looking up predecessors by WBS/Outline
+            const outlineStr = String(getVal(row, 'outline') || '').trim();
+            if (outlineStr) taskNumMap.set(outlineStr, tUID);
 
             // Use Outline Number directly for WBS and depth
-            const outlineStr = String(getVal(row, 'outline') || '').trim();
             const dotCount = (outlineStr.match(/\./g) || []).length;
             const outlineLevel = dotCount + 1; // "1" → level 1, "1.1" → level 2, "1.1.1" → level 3
 
@@ -178,7 +181,9 @@
 
             let durDays = 0;
             if (sDate && fDate) {
-                durDays = Math.max(0, Math.ceil((fDate.getTime() - sDate.getTime()) / 864e5));
+                durDays = Math.ceil((fDate.getTime() - sDate.getTime()) / 864e5);
+                if (!isMilestone && durDays === 0) durDays = 1;
+                durDays = Math.max(0, durDays);
             }
 
             const assigned = splitList(getVal(row, 'assigned'));
@@ -210,19 +215,21 @@
         });
 
         /* ──────── PASS 3: detect summary tasks from outline ──────── */
-        for (let i = 0; i < project.tasks.length - 1; i++) {
-            const cur  = project.tasks[i];
-            const next = project.tasks[i + 1];
-            if (next.outlineLevel > cur.outlineLevel) cur.summary = true;
-        }
+        project.tasks.forEach(cur => {
+            if (cur.wbs) {
+                // If any task has a WBS that starts with "cur.wbs." (e.g. "1" -> "1.1")
+                cur.summary = project.tasks.some(t => t.wbs && t.wbs.startsWith(cur.wbs + '.'));
+            }
+        });
 
         /* ──────── PASS 4: resolve dependencies ──────── */
         project.tasks.forEach(t => {
             if (t._rawDeps) {
                 const depNums = t._rawDeps.split(/[,;]/).map(s => s.trim()).filter(Boolean);
                 depNums.forEach(num => {
-                    const pUID = taskNumMap.get(num) || parseInt(num);
-                    if (pUID && pUID !== t.uid) {
+                    let pUID = taskNumMap.get(num);
+                    if (!pUID && /^\d+$/.test(num)) pUID = parseInt(num); // Fallback to raw integer ONLY if strictly numeric
+                    if (pUID && !isNaN(pUID) && pUID !== t.uid) {
                         t.predecessors.push({ predecessorUID: pUID, type: 1, typeName: 'FS', lag: 0 });
                     }
                 });

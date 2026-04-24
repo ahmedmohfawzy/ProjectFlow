@@ -493,9 +493,9 @@
 
         try {
             if (config.mode === MODES.OPERATIONS) {
-                const query = `$filter=_msdyn_taskid_value eq (${projectId})&$select=msdyn_resourceassignmentid,_msdyn_taskid_value,_msdyn_bookableresourceid_value,msdyn_plannedwork,msdyn_actualwork&$expand=msdyn_BookableResource_ResourceAssignment($select=name)`;
-                const result = await _callDataverse('GET', ENTITIES.ASSIGNMENTS_OPS, query);
-                return result.value.map(a => ({
+                const query = `$filter=_msdyn_project_value eq (${projectId})&$select=msdyn_resourceassignmentid,_msdyn_taskid_value,_msdyn_bookableresourceid_value,msdyn_plannedwork,msdyn_actualwork&$expand=msdyn_BookableResource_ResourceAssignment($select=name)`;
+                const allAssignments = await fetchAllPages(ENTITIES.ASSIGNMENTS_OPS, query);
+                return allAssignments.map(a => ({
                     id: a.msdyn_resourceassignmentid,
                     taskId: a._msdyn_taskid_value,
                     resourceId: a._msdyn_bookableresourceid_value,
@@ -564,14 +564,15 @@
             if (config.mode === MODES.OPERATIONS) {
                 const from = fromDate.toISOString().split('T')[0];
                 const to = toDate.toISOString().split('T')[0];
-                const query = `$filter=_msdyn_project_value eq (${projectId}) and msdyn_transactiondate ge ${from} and msdyn_transactiondate le ${to}&$select=msdyn_actualid,msdyn_description,msdyn_transactiondate,msdyn_quantity,msdyn_amount`;
+                const query = `$filter=_msdyn_project_value eq (${projectId}) and msdyn_transactiondate ge ${from} and msdyn_transactiondate le ${to}&$select=msdyn_actualid,msdyn_description,msdyn_transactiondate,msdyn_quantity,msdyn_amount,msdyn_transactiontypecode`;
                 const result = await _callDataverse('GET', ENTITIES.JOURNALS_OPS, query);
                 return result.value.map(t => ({
                     id: t.msdyn_actualid,
                     description: t.msdyn_description || '',
                     date: new Date(t.msdyn_transactiondate),
                     quantity: t.msdyn_quantity || 0,
-                    amount: t.msdyn_amount || 0
+                    amount: t.msdyn_amount || 0,
+                    transactionTypeCode: t.msdyn_transactiontypecode
                 }));
             } else {
                 const from = fromDate.toISOString().split('T')[0];
@@ -608,15 +609,16 @@
             const budgetCost = budget.totalBudget;
             const actualCost = transactions.reduce((sum, t) => {
                 if (config.mode === MODES.OPERATIONS) {
-                    return sum + (t.amount || 0);
+                    // msdyn_transactiontypecode: 192350000 = Cost, 192350004 = Unbilled Sales
+                    return sum + (t.transactionTypeCode === 192350000 ? (t.amount || 0) : 0);
                 } else {
                     return sum + (t.costAmount || 0);
                 }
             }, 0);
-            const budgetRevenue = budget.totalBudget;
+            const budgetRevenue = budget.totalRevenue || budget.totalBudget; // Fallback if not separated
             const actualRevenue = transactions.reduce((sum, t) => {
                 if (config.mode === MODES.OPERATIONS) {
-                    return sum + (t.amount || 0);
+                    return sum + (t.transactionTypeCode === 192350004 ? (t.amount || 0) : 0);
                 } else {
                     return sum + (t.salesAmount || 0);
                 }
