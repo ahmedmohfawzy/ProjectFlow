@@ -1899,32 +1899,31 @@ function _getMsal() {
      * @param {string[]} planIds     - Plan IDs to import
      * @param {Function} onProgress  - Optional callback(completed, total, planTitle)
      */
-    async function importMultiplePlans(planIds, onProgress) {
+    /**
+     * Import multiple Dataverse projects in sequence.
+     */
+    async function importMultipleDataverseProjects(dataverseUrl, projectIds, projectTitles, onProgress) {
         const results = [];
-        const DELAY_BETWEEN_PLANS = 2000; // 2s delay to avoid Graph API throttling (429)
+        const DELAY_BETWEEN_PLANS = 1000; 
 
-        for (let i = 0; i < planIds.length; i++) {
-            const planId = planIds[i];
+        for (let i = 0; i < projectIds.length; i++) {
+            const projectId = projectIds[i];
+            const title = projectTitles ? projectTitles[i] : 'Dataverse Project';
             try {
-                console.log(`[MSGraph] Portfolio import: plan ${i + 1}/${planIds.length} (${planId.substring(0, 8)}…)`);
-                const proj = await importPlan(planId);
-                results.push({ planId, success: true, project: proj });
-                console.log(`[MSGraph] Plan ${i + 1} imported ✓ — ${proj?.tasks?.length || 0} tasks`);
+                console.log(`[Dataverse] Portfolio import: project ${i + 1}/${projectIds.length} (${projectId.substring(0, 8)}…)`);
+                const proj = await importFromDataverse(dataverseUrl, projectId, title);
+                results.push({ planId: projectId, success: true, project: proj });
+                console.log(`[Dataverse] Project ${i + 1} imported ✓ — ${proj?.tasks?.length || 0} tasks`);
             } catch (err) {
-                console.warn(`[MSGraph] Plan ${i + 1} failed: ${err.message}`);
-                results.push({ planId, success: false, error: err.message });
+                console.warn(`[Dataverse] Project ${i + 1} failed: ${err.message}`);
+                results.push({ planId: projectId, success: false, error: err.message });
             }
-            if (onProgress) onProgress(i + 1, planIds.length);
+            if (onProgress) onProgress(i + 1, projectIds.length);
 
-            // Delay before next plan to avoid rate limiting
-            if (i < planIds.length - 1) {
+            if (i < projectIds.length - 1) {
                 await new Promise(r => setTimeout(r, DELAY_BETWEEN_PLANS));
             }
         }
-
-        const ok = results.filter(r => r.success).length;
-        const fail = results.filter(r => !r.success).length;
-        console.log(`[MSGraph] Portfolio import complete: ${ok} succeeded, ${fail} failed`);
         return results;
     }
 
@@ -2397,27 +2396,36 @@ function _getMsal() {
             wizard.appendChild(signInBtn);
         }
 
-        // ── Step 2: Select Plan(s) ──
+        // ── Step 2: Select Plan(s) (Dataverse Premium Only) ──
         async function renderPlanSelection() {
             const loadingMsg = document.createElement('div');
             loadingMsg.style.cssText = 'text-align:center;padding:20px;color:var(--text-muted,#888);font-size:0.85rem;';
-            loadingMsg.innerHTML = '🔄 Loading your Planner plans...';
+            loadingMsg.innerHTML = '🔄 Discovering Planner Premium environment...';
             wizard.appendChild(loadingMsg);
 
             try {
-                const plans = await getMyPlans();
+                // 1. Discover Dataverse URL (requires at least one premium plan to exist and be accessible via Graph)
+                const dataverseUrl = await discoverDataverseUrl();
+                if (!dataverseUrl) {
+                    loadingMsg.remove();
+                    showStatus('No Planner Premium (Dataverse) environment could be automatically discovered. Ensure you have at least one premium plan created in Project for the web.', 'error');
+                    return;
+                }
+
+                loadingMsg.innerHTML = '🔄 Fetching Premium Projects from Dataverse...';
+                const plans = await listDataverseProjects(dataverseUrl);
                 loadingMsg.remove();
 
                 if (!plans || plans.length === 0) {
-                    showStatus('No plans found in your Planner account.', 'error');
+                    showStatus('No projects found in the Dataverse environment.', 'error');
                     return;
                 }
 
                 const label = document.createElement('div');
                 label.style.cssText = 'font-weight:500;margin-bottom:10px;font-size:0.85rem;color:var(--text-secondary,#a0aec0);display:flex;justify-content:space-between;align-items:center;';
                 label.innerHTML = `
-                    <span>Select plans to import:</span>
-                    <span style="font-size:11px;opacity:0.7">${plans.length} plan${plans.length !== 1 ? 's' : ''} found</span>
+                    <span>Select Premium Projects (Dataverse):</span>
+                    <span style="font-size:11px;opacity:0.7">${plans.length} project${plans.length !== 1 ? 's' : ''} found</span>
                 `;
                 wizard.appendChild(label);
 
@@ -2502,30 +2510,30 @@ function _getMsal() {
                     importBtn.style.opacity = selected.length > 0 ? '1' : '0.5';
                     importBtn.style.cursor  = selected.length > 0 ? 'pointer' : 'not-allowed';
                     if (selected.length === 0) {
-                        importBtn.textContent = '📥 Import Plan';
+                        importBtn.textContent = '📥 Import Project';
                     } else if (selected.length === 1) {
-                        importBtn.textContent = `📥 Import 1 Plan`;
+                        importBtn.textContent = `📥 Import 1 Project`;
                     } else {
-                        importBtn.textContent = `📥 Import ${selected.length} Plans → Portfolio`;
+                        importBtn.textContent = `📥 Import ${selected.length} Projects → Portfolio`;
                     }
                 }
 
                 importBtn.addEventListener('click', () => {
                     const selected = checkboxes.filter(cb => cb.checked);
-                    if (selected.length === 0) { showStatus('Please select at least one plan', 'error'); return; }
+                    if (selected.length === 0) { showStatus('Please select at least one project', 'error'); return; }
 
                     importBtn.disabled = true;
                     importBtn.style.opacity = '0.7';
-                    importBtn.textContent = `⏳ Importing ${selected.length} plan${selected.length > 1 ? 's' : ''}…`;
+                    importBtn.textContent = `⏳ Importing ${selected.length} project${selected.length > 1 ? 's' : ''}…`;
 
                     if (selected.length === 1) {
-                        // Single plan: original behavior
-                        onComplete({ planId: selected[0].value, planTitle: selected[0].dataset.title });
+                        // Single plan: Dataverse import
+                        onComplete({ dataverseUrl, planId: selected[0].value, planTitle: selected[0].dataset.title });
                     } else {
                         // Multiple plans: portfolio import
                         const planIds    = selected.map(cb => cb.value);
                         const planTitles = selected.map(cb => cb.dataset.title);
-                        onComplete({ planIds, planTitles, isPortfolioImport: true });
+                        onComplete({ dataverseUrl, planIds, planTitles, isPortfolioImport: true });
                     }
                 });
 
@@ -2701,7 +2709,8 @@ function _getMsal() {
         getPlanDetails,
         getPlanTaskDetails,
         importPlan,
-        importMultiplePlans,
+        importFromDataverse,
+        importMultipleDataverseProjects,
         pushTaskToPlanner,
         syncProjectToPlanner,
         startAutoSync,

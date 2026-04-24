@@ -6106,15 +6106,11 @@ import { TeamsBridge } from './teams-bridge.js';
             return;
         }
 
-        if (MSGraphClient.isAuthenticated() && _plannerConnectedPlanId && project) {
-            // Already connected with active project — show sync panel
-            MSGraphClient.renderSyncPanel(body, project, _plannerConnectedPlanId);
-        } else {
-            // Show setup wizard — single plan OR multi-plan portfolio
-            MSGraphClient.renderSetupWizard(body, async ({ planId, planTitle, planIds, planTitles, isPortfolioImport }) => {
+        // Show setup wizard — single plan OR multi-plan portfolio
+        MSGraphClient.renderSetupWizard(body, async ({ planId, planTitle, planIds, planTitles, isPortfolioImport, dataverseUrl }) => {
 
-                // ── MULTI-PLAN: import each plan with live progress UI ──
-                if (isPortfolioImport && planIds && planIds.length > 1) {
+            // ── MULTI-PLAN: import each plan with live progress UI ──
+            if (isPortfolioImport && planIds && planIds.length > 1) {
                     // Keep modal open — replace body with progress panel
                     body.innerHTML = '';
                     body.style.cssText = 'padding:20px;max-width:520px;margin:0 auto;';
@@ -6165,9 +6161,9 @@ import { TeamsBridge } from './teams-bridge.js';
                     // Run import
                     try {
                         let saved = 0, failed = 0;
-                        const results = await MSGraphClient.importMultiplePlans(planIds, (done, total) => {
+                        const results = await MSGraphClient.importMultipleDataverseProjects(dataverseUrl, planIds, planTitles, (done, total) => {
                             barFill.style.width = `${Math.round((done / total) * 100)}%`;
-                            statusText.textContent = `Importing plan ${done} of ${total}…`;
+                            statusText.textContent = `Importing project ${done} of ${total}…`;
                             // Update current plan row
                             if (done <= planRows.length) {
                                 planRows[done - 1].icon.textContent = '🔄';
@@ -6244,12 +6240,12 @@ import { TeamsBridge } from './teams-bridge.js';
                     return;
                 }
 
-                // ── SINGLE-PLAN: original behavior — open as active project ──
+                // ── SINGLE-PLAN: Dataverse import ──
                 _plannerConnectedPlanId = planId;
-                showToast('info', `Connected to Planner: "${planTitle}". Importing...`);
+                showToast('info', `Connecting to Dataverse: "${planTitle}". Importing...`);
                 try {
-                    setStatus('Importing from MS Planner…');
-                    const imported = await MSGraphClient.importPlan(planId);
+                    setStatus('Importing from Dataverse…');
+                    const imported = await MSGraphClient.importFromDataverse(dataverseUrl, planId, planTitle);
                     if (!imported) { showToast('error', 'Import returned empty project'); return; }
                     project = imported;
                     // Pre-process project data
@@ -6265,33 +6261,30 @@ import { TeamsBridge } from './teams-bridge.js';
                     reindexTasks();
                     activeProjectId = ProjectStore.generateId();
                     onProjectLoaded();
-                    // Start auto-sync — pass getter so the interval always sees the live project
-                    MSGraphClient.startAutoSync(() => project, planId);
+                    // Auto-sync is disabled for one-way imports
                     _updatePlannerSyncBtn(true);
-                    showToast('success', `Imported from Planner: "${project.name}" — ${project.tasks.length} items`);
+                    showToast('success', `Imported from Planner Premium: "${project.name}" — ${project.tasks.length} items`);
                     toggleModal('modalPlannerSync', false);
                 } catch(e) {
-                    showToast('error', 'Planner import failed: ' + e.message);
+                    showToast('error', 'Dataverse import failed: ' + e.message);
                 } finally { setStatus('Ready'); }
             });
         }
-    }
 
     /** Import a Planner plan as a new ProjectFlow project */
-    async function handlePlannerImport(planId) {
+    async function handlePlannerImport(planId, dataverseUrl) {
         if (typeof MSGraphClient === 'undefined') return;
         try {
-            setStatus('Importing from MS Planner…');
-            const imported = await MSGraphClient.importPlan(planId);
+            setStatus('Importing from Dataverse…');
+            const imported = await MSGraphClient.importFromDataverse(dataverseUrl, planId, 'Project');
             if (!imported) { showToast('error', 'Import returned empty project'); return; }
             project = imported;
             _plannerConnectedPlanId = planId;
             activeProjectId = ProjectStore.generateId();
             reindexTasks();
             onProjectLoaded();
-            MSGraphClient.startAutoSync(() => project, planId);
             _updatePlannerSyncBtn(true);
-            showToast('success', `Imported from Planner: "${project.name}" — ${project.tasks.length} items`);
+            showToast('success', `Imported from Dataverse: "${project.name}" — ${project.tasks.length} items`);
             toggleModal('modalPlannerSync', false);
         } catch(e) {
             showToast('error', 'Planner import failed: ' + e.message);
@@ -6301,10 +6294,10 @@ import { TeamsBridge } from './teams-bridge.js';
     /**
      * Auto-import a single Planner plan on startup (no UI needed)
      */
-    async function _autoImportPlan(planId, planTitle) {
+    async function _autoImportPlan(planId, planTitle, dataverseUrl) {
         try {
-            setStatus('Loading Planner project…');
-            const imported = await MSGraphClient.importPlan(planId);
+            setStatus('Loading Planner Premium project…');
+            const imported = await MSGraphClient.importFromDataverse(dataverseUrl, planId, planTitle);
             if (!imported) return;
             project = imported;
             _plannerConnectedPlanId = planId;
@@ -6321,9 +6314,8 @@ import { TeamsBridge } from './teams-bridge.js';
             activeProjectId = ProjectStore.generateId();
             onProjectLoaded();
             TeamsBridge.saveLastPlan(planId);
-            MSGraphClient.startAutoSync(() => project, planId);
             _updatePlannerSyncBtn(true);
-            showToast('success', `✅ Loaded from Planner: "${planTitle}" — ${project.tasks.length} tasks`);
+            showToast('success', `✅ Loaded from Planner Premium: "${planTitle}" — ${project.tasks.length} tasks`);
         } catch(e) {
             showToast('error', 'Auto-import failed: ' + e.message);
         } finally { setStatus('Ready'); }
