@@ -1,0 +1,45 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "cb85d5a6-ed15-4a0e-8ead-40c6d45491a6",
+  "developer": {
+    "name": "Ahmed M. Fawzy",
+    "websiteUrl": "https://ahmedmohfawzy.github.io/ProjectFlow",
+    "privacyUrl": "https://ahmedmohfawzy.github.io/ProjectFlow",
+    "termsOfUseUrl": "https://ahmedmohfawzy.github.io/ProjectFlow"
+  },
+  "name": {
+    "short": "ProjectFlow",
+    "full": "ProjectFlow™ — Professional Project Management"
+  },
+  "description": {
+    "short": "Professional project management with Gantt, CPM, EVM & Portfolio reporting",
+    "full": "ProjectFlow™ is a comprehensive, browser-based project management system featuring Gantt charts, Critical Path Method (CPM), Earned Value Management (EVM), resource leveling, portfolio dashboards, and Microsoft Planner integration. Built for teams that need enterprise-grade project controls."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#6366f1",
+  "staticTabs": [
+    {
+      "entityId": "projectflow-home",
+      "name": "ProjectFlow",
+      "contentUrl": "https://ahmedmohfawzy.github.io/ProjectFlow/index.html",
+      "websiteUrl": "https://ahmedmohfawzy.github.io/ProjectFlow/index.html",
+      "scopes": ["personal"]
+    }
+  ],
+  "webApplicationInfo": {
+    "id": "5c5eccbf-b7fb-4041-b969-44da0d6cf406",
+    "resource": "api://ahmedmohfawzy.github.io/ProjectFlow/5c5eccbf-b7fb-4041-b969-44da0d6cf406"
+  },
+  "permissions": ["identity"],
+  "validDomains": [
+    "ahmedmohfawzy.github.io",
+    "login.microsoftonline.com"
+  ],
+  "showLoadingIndicator": false,
+  "isFullScreen": false
+}

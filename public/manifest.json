@@ -1,0 +1,21 @@
+{
+  "name": "ProjectFlow™",
+  "short_name": "ProjectFlow",
+  "description": "Professional browser-based project management — Gantt, EVM, Portfolio",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1117",
+  "theme_color": "#6366f1",
+  "orientation": "any",
+  "lang": "en",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "screenshots": [],
+  "categories": ["productivity", "business"],
+  "shortcuts": [
+    { "name": "New Project",  "short_name": "New", "url": "/?action=new",  "description": "Create a new project" },
+    { "name": "Portfolio",    "short_name": "Portfolio", "url": "/?view=portfolio", "description": "Open Portfolio Hub" }
+  ]
+}
