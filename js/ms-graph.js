@@ -623,10 +623,10 @@ function _getMsal() {
             // 1. Fetch tasks with ALL fields including msdyn_wbsid for correct WBS order
             const tasksUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projecttasks`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
-                + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,`
+                + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_displaysequence,`
                 + `_msdyn_parenttask_value,msdyn_scheduledstart,msdyn_scheduledend,`
                 + `msdyn_duration,msdyn_progress,msdyn_effort,msdyn_description`
-                + `&$orderby=msdyn_scheduledstart asc`
+                + `&$orderby=msdyn_displaysequence asc`
                 + `&$top=500`;
 
             // 2. Fetch resource assignments
@@ -878,15 +878,9 @@ function _getMsal() {
             return ids.sort((a, b) => {
                 const ia = dvMap.get(a);
                 const ib = dvMap.get(b);
-                const sa = ia?.scheduledStart || '9999';
-                const sb = ib?.scheduledStart || '9999';
-                if (sa !== sb) return sa.localeCompare(sb);
-                // Tiebreak by outlineLevel (ascending) so shallower tasks come first
-                const la = ia?.outlineLevel || 99;
-                const lb = ib?.outlineLevel || 99;
-                if (la !== lb) return la - lb;
-                // Last resort: alphabetical (kept for stability but rarely reached)
-                return (ia?.subject || '').localeCompare(ib?.subject || '');
+                const seqA = ia?.displaySequence ?? ia?.index ?? 999999;
+                const seqB = ib?.displaySequence ?? ib?.index ?? 999999;
+                return seqA - seqB;
             });
         };
 
@@ -1028,10 +1022,10 @@ function _getMsal() {
         const [tasksResp, assignResp, teamResp, depResp] = await Promise.all([
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projecttasks`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
-                + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,`
+                + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_displaysequence,`
                 + `_msdyn_parenttask_value,msdyn_scheduledstart,msdyn_scheduledend,`
                 + `msdyn_duration,msdyn_progress,msdyn_effort,msdyn_description`
-                + `&$orderby=msdyn_scheduledstart asc&$top=500`,
+                + `&$orderby=msdyn_displaysequence asc&$top=500`,
                 { method: 'GET', headers: dvHeaders }),
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_resourceassignments`
                 + `?$filter=_msdyn_projectid_value eq '${projectId}'`
@@ -1111,8 +1105,11 @@ function _getMsal() {
 
         // Build a dvMap — use msdyn_wbsid directly when available
         const dvMap = new Map();
+        let idx = 0;
         dvTasks.forEach(t => {
             dvMap.set(t.msdyn_projecttaskid, {
+                index: idx++,
+                displaySequence: t.msdyn_displaysequence || 0,
                 outlineLevel: t.msdyn_outlinelevel || 1,
                 wbsId: t.msdyn_wbsid || '',
                 parentTaskId: t._msdyn_parenttask_value || null,
