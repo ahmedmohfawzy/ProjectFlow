@@ -625,7 +625,7 @@ function _getMsal() {
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
                 + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_displaysequence,`
                 + `_msdyn_parenttask_value,msdyn_scheduledstart,msdyn_scheduledend,`
-                + `msdyn_duration,msdyn_progress,msdyn_effort,msdyn_description`
+                + `msdyn_duration,msdyn_scheduleddurationminutes,msdyn_progress,msdyn_effort,msdyn_description`
                 + `&$orderby=msdyn_displaysequence asc`
                 + `&$top=500`;
 
@@ -1024,7 +1024,7 @@ function _getMsal() {
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
                 + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_displaysequence,`
                 + `_msdyn_parenttask_value,msdyn_scheduledstart,msdyn_scheduledend,`
-                + `msdyn_duration,msdyn_progress,msdyn_effort,msdyn_description`
+                + `msdyn_duration,msdyn_scheduleddurationminutes,msdyn_progress,msdyn_effort,msdyn_description`
                 + `&$orderby=msdyn_displaysequence asc&$top=500`,
                 { method: 'GET', headers: dvHeaders }),
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_resourceassignments`
@@ -1155,14 +1155,28 @@ function _getMsal() {
             _dataverseProjectId: projectId,
         };
 
+        const toLocalYYYYMMDD = (iso) => {
+            if (!iso) return null;
+            const d = new Date(iso);
+            return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        };
+
         let uid = 1;
         sortedDvTasks.forEach(t => {
             const taskUid = uid++;
             const dvInfo = dvMap.get(t.msdyn_projecttaskid);
-            const start = t.msdyn_scheduledstart ? t.msdyn_scheduledstart.split('T')[0] : today;
-            const finish = t.msdyn_scheduledend ? t.msdyn_scheduledend.split('T')[0] : start;
-            const dur = _dvDurationDays(t.msdyn_duration, start, finish);
-            const pct = Math.round((t.msdyn_progress || 0) * 100);
+            const start = toLocalYYYYMMDD(t.msdyn_scheduledstart) || today;
+            const finish = toLocalYYYYMMDD(t.msdyn_scheduledend) || start;
+            
+            // Prefer scheduleddurationminutes if available, else duration, else calculate from dates
+            let durationMin = t.msdyn_scheduleddurationminutes;
+            if (durationMin === undefined || durationMin === null) durationMin = t.msdyn_duration;
+            const dur = _dvDurationDays(durationMin, start, finish);
+            
+            // Progress is usually 0-100 in Dataverse, not 0-1. Guard against 5000%.
+            let pct = t.msdyn_progress || 0;
+            if (pct > 0 && pct <= 1) pct = Math.round(pct * 100); 
+            else pct = Math.round(pct);
             const isSummary = parentIds.has(t.msdyn_projecttaskid);
             const resourceNames = taskResMap.get(t.msdyn_projecttaskid) || [];
 
