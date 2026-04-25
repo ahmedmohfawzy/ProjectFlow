@@ -1034,16 +1034,38 @@ function _getMsal() {
             Prefer: 'odata.include-annotations="OData.Community.Display.V1.FormattedValue"',
         };
 
-        // Fetch tasks, assignments, team + project entity in parallel
-        // NOTE: dependency fetch runs AFTER tasks are loaded (chunked by task GUIDs)
+        // ── Fetch tasks, assignments, team + project entity ──
+        // Schema variants: 
+        //   Project Ops:   msdyn_scheduleddurationminutes, msdyn_plannedcost, etc.
+        //   Planner Prem:  msdyn_duration, msdyn_effort, etc.
+        // Strategy: Probe 1 task to discover available fields.
+        let taskFields = ['msdyn_projecttaskid','msdyn_subject','msdyn_outlinelevel','msdyn_displaysequence','_msdyn_parenttask_value','msdyn_scheduledstart','msdyn_scheduledend','msdyn_progress','msdyn_effort','msdyn_description'];
+        
+        try {
+            const taskProbe = await fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projecttasks?$top=1`, { method: 'GET', headers: dvHeaders });
+            if (taskProbe.ok) {
+                const probeData = await taskProbe.json();
+                const sample = (probeData.value || [])[0];
+                if (sample) {
+                    const keys = Object.keys(sample);
+                    // Add optional fields only if they exist
+                    if (keys.includes('msdyn_scheduleddurationminutes')) taskFields.push('msdyn_scheduleddurationminutes');
+                    if (keys.includes('msdyn_duration'))                 taskFields.push('msdyn_duration');
+                    if (keys.includes('msdyn_effortcompleted'))         taskFields.push('msdyn_effortcompleted');
+                    if (keys.includes('msdyn_effortremaining'))         taskFields.push('msdyn_effortremaining');
+                    if (keys.includes('msdyn_plannedcost'))             taskFields.push('msdyn_plannedcost');
+                    if (keys.includes('msdyn_actualcost'))              taskFields.push('msdyn_actualcost');
+                    if (keys.includes('msdyn_iscritical'))              taskFields.push('msdyn_iscritical');
+                    if (keys.includes('msdyn_ismilestone'))             taskFields.push('msdyn_ismilestone');
+                    if (keys.includes('msdyn_wbsid'))                   taskFields.push('msdyn_wbsid');
+                }
+            }
+        } catch (e) { console.warn('[Dataverse] Task probe failed:', e.message); }
+
         const [tasksResp, assignResp, teamResp, projEntityResp] = await Promise.all([
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projecttasks`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
-                + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_displaysequence,`
-                + `_msdyn_parenttask_value,msdyn_scheduledstart,msdyn_scheduledend,msdyn_scheduleddurationminutes,`
-                + `msdyn_progress,msdyn_effort,msdyn_effortcompleted,msdyn_effortremaining,`
-                + `msdyn_plannedcost,msdyn_actualcost,msdyn_iscritical,msdyn_ismilestone,`
-                + `msdyn_wbsid,msdyn_description`
+                + `&$select=${[...new Set(taskFields)].join(',')}`
                 + `&$orderby=msdyn_displaysequence asc&$top=500`,
                 { method: 'GET', headers: dvHeaders }),
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_resourceassignments`
@@ -1058,9 +1080,9 @@ function _getMsal() {
                 { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projects`
                 + `?$filter=msdyn_projectid eq '${projectId}'`
-                + `&$select=msdyn_subject,_msdyn_projectmanager_value`
+                + `&$select=msdyn_projectid,msdyn_subject,_msdyn_projectmanager_value`
                 + `&$top=1`,
-                { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
+                { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false }))
         ]);
 
         if (!tasksResp.ok) {
