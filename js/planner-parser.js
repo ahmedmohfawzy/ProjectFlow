@@ -223,42 +223,93 @@
         });
 
         /* ──────── PASS 4: resolve dependencies ──────── */
-        // Dependency format from MS Planner/Project Excel export:
-        //   "3FS"         → task 3, Finish-to-Start, lag 0
-        //   "3FS+2"       → task 3, Finish-to-Start, lag +2 days
-        //   "9FS, 10FS"   → two predecessors
-        //   "3"           → task 3, FS assumed (older/simple format)
-        // Regex: leading number + optional link type (FS/FF/SS/SF) + optional lag (±N)
-        const DEP_RE = /^(\d+)\s*(FS|FF|SS|SF)?\s*([+\-]\s*\d+)?$/i;
+        // Dependency formats accepted from MS Planner/Project Excel export:
+        //   "3FS+2"       → task number 3, Finish-to-Start, lag +2 days
+        //   "1.2.3FS"     → outline number 1.2.3, FS, no lag
+        //   "9FS, 10FS"   → two predecessors (split on comma/semicolon)
+        //   "3"  / "1.2"  → FS assumed, lag 0  (simpler export formats)
+        //   "Design Phase FS+1" — name-based: fallback after regex fails
+        //
+        // DEP_RE accepts: plain integer OR dotted-outline (1.2.3)
+        //   + optional link type (FS/FF/SS/SF) + optional lag (±N)
+        const DEP_RE = /^(\d+(?:\.\d+)*)\s*(FS|FF|SS|SF)?\s*([+\-]\s*\d+)?$/i;
         const LINK_TYPE_CODE = { FS: 1, FF: 0, SS: 3, SF: 2 };
 
+        // Build a name → uid map for the name-based fallback
+        const nameToUid = new Map();
         project.tasks.forEach(t => {
-            if (t._rawDeps) {
-                const parts = t._rawDeps.split(/[,;]/).map(s => s.trim()).filter(Boolean);
-                parts.forEach(part => {
-                    const m = part.match(DEP_RE);
-                    if (!m) return; // unrecognised format — skip
+            if (t.name) nameToUid.set(t.name.trim().toLowerCase(), t.uid);
+        });
 
-                    const taskNumStr = m[1];                               // e.g. "3"
-                    const linkType   = (m[2] || 'FS').toUpperCase();       // e.g. "FS"
-                    const lagDays    = m[3] ? parseInt(m[3].replace(/\s/g,'')) : 0;
+        project.tasks.forEach(t => {
+            if (!t._rawDeps) { delete t._rawDeps; return; }
 
-                    // Resolve task number → UID via taskNumMap (stores String keys)
-                    let pUID = taskNumMap.get(taskNumStr)
-                            || taskNumMap.get(String(parseInt(taskNumStr)));
+            const parts = t._rawDeps.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+            parts.forEach(part => {
+                const m = part.match(DEP_RE);
 
-                    if (!pUID) return; // predecessor not found in this project
-                    if (pUID === t.uid) return; // self-loop guard
+                if (!m) {
+                    // ── Fallback: try to match the leading text as a task name ──
+                    // e.g. "Design Phase FS+2" → name="Design Phase", type=FS, lag=2
+                    const nameFallback = part.match(/^(.+?)\s*(FS|FF|SS|SF)?\s*([+\-]\s*\d+)?$/i);
+                    const candidateName = nameFallback ? nameFallback[1].trim().toLowerCase() : part.toLowerCase();
+                    const nameUid = nameToUid.get(candidateName);
 
-                    t.predecessors.push({
-                        predecessorUID: pUID,
-                        type: LINK_TYPE_CODE[linkType] ?? 1,
-                        typeName: linkType,
-                        lag: lagDays,
-                    });
+                    if (nameUid && nameUid !== t.uid) {
+                        const linkType = ((nameFallback && nameFallback[2]) || 'FS').toUpperCase();
+                        const lagDays  = (nameFallback && nameFallback[3])
+                            ? parseInt(nameFallback[3].replace(/\s/g,'')) : 0;
+                        t.predecessors.push({
+                            predecessorUID: nameUid,
+                            type: LINK_TYPE_CODE[linkType] ?? 1,
+                            typeName: linkType,
+                            lag: lagDays,
+                        });
+                        return;
+                    }
+
+                    // Completely unrecognised — log and track for audit
+                    if (!t._missingPredecessors) t._missingPredecessors = [];
+                    t._missingPredecessors.push(part);
+                    console.warn(`[PlannerParser] Unrecognised dependency format "${part}" on task "${t.name}" — skipped`);
+                    return;
+                }
+
+                const taskNumStr = m[1];                               // e.g. "3" or "1.2.3"
+                const linkType   = (m[2] || 'FS').toUpperCase();       // e.g. "FS"
+                const lagDays    = m[3] ? parseInt(m[3].replace(/\s/g,'')) : 0;
+
+                // Resolve via taskNumMap (holds both "Task number" strings and outline strings)
+                let pUID = taskNumMap.get(taskNumStr)
+                        || taskNumMap.get(String(parseInt(taskNumStr)));
+
+                if (!pUID) {
+                    // Not found by number — try as a name last resort
+                    pUID = nameToUid.get(taskNumStr.toLowerCase());
+                }
+
+                if (!pUID) {
+                    if (!t._missingPredecessors) t._missingPredecessors = [];
+                    t._missingPredecessors.push(part);
+                    console.warn(`[PlannerParser] Predecessor "${part}" not found in project tasks (task "${t.name}") — skipped`);
+                    return;
+                }
+                if (pUID === t.uid) return; // self-loop guard
+
+                t.predecessors.push({
+                    predecessorUID: pUID,
+                    type: LINK_TYPE_CODE[linkType] ?? 1,
+                    typeName: linkType,
+                    lag: lagDays,
                 });
+            });
+
+            // Audit summary for this task
+            if (t._missingPredecessors?.length) {
+                console.warn(`[PlannerParser] Task "${t.name}" has ${t._missingPredecessors.length} unresolved predecessor(s):`, t._missingPredecessors);
             }
             delete t._rawDeps;
+            delete t._missingPredecessors;
         });
 
         /* ──────── Final: set global dates ──────── */

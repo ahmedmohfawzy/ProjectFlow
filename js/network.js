@@ -396,9 +396,20 @@
                     posY[ti] = posY[ti] * 0.4 + avgY * 0.6;
                 });
                 grp.sort((a,b) => posY[a] - posY[b]);
+
+                // Forward pass: push nodes down to maintain minimum vertical gap
                 for (let i = 1; i < grp.length; i++) {
                     const minY = posY[grp[i-1]] + D.h + D.gapY;
                     if (posY[grp[i]] < minY) posY[grp[i]] = minY;
+                }
+
+                // Backward pass: push nodes up to maintain minimum vertical gap.
+                // Without this, a forward-only push causes the whole column to drift
+                // downward in dense layers, creating overlap when nodes are re-sorted
+                // in subsequent iterations.
+                for (let i = grp.length - 2; i >= 0; i--) {
+                    const maxY = posY[grp[i+1]] - D.h - D.gapY;
+                    if (posY[grp[i]] > maxY) posY[grp[i]] = maxY;
                 }
             }
         });

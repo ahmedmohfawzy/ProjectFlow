@@ -1212,9 +1212,11 @@ function _getMsal() {
             const start = toLocalYYYYMMDD(t.msdyn_scheduledstart) || today;
             const finish = toLocalYYYYMMDD(t.msdyn_scheduledend) || start;
             
-            // Prefer scheduleddurationminutes if available, else duration, else calculate from dates
+            // Prefer scheduleddurationminutes if available, else duration, else calculate from dates.
+            // Guard: value must be a finite positive number; anything else falls through to date diff.
             let durationMin = t.msdyn_scheduleddurationminutes;
             if (durationMin === undefined || durationMin === null) durationMin = t.msdyn_duration;
+            if (typeof durationMin !== 'number' || !isFinite(durationMin) || durationMin < 0) durationMin = null;
             const dur = _dvDurationDays(durationMin, start, finish);
             
             // Progress is usually 0-100 in Dataverse, not 0-1. Guard against 5000%.
@@ -1261,6 +1263,9 @@ function _getMsal() {
 
         // ── Parse and resolve task dependencies for Network/PERT ──
         if (depResp.ok) {
+            // ✅ Dependency endpoint reachable — mark project so UI can show live network
+            project._dependenciesAvailable = true;
+
             const depData = await depResp.json();
             const dvDeps = depData.value || [];
             const LINK_TYPES = { 192350000: 'FS', 192350001: 'FF', 192350002: 'SS', 192350003: 'SF' };
@@ -1275,32 +1280,55 @@ function _getMsal() {
             const minutesPerDay = project.minutesPerDay || 480;
             dvDeps.forEach(dep => {
                 // Normalise GUIDs to lowercase to match dvIdToUid keys
-                const successorUid  = dvIdToUid.get((dep._msdyn_successortask_value  || '').toLowerCase());
-                const predecessorUid = dvIdToUid.get((dep._msdyn_predecessortask_value || '').toLowerCase());
-                if (successorUid && predecessorUid) {
-                    const task = project.tasks.find(t => t.uid === successorUid);
-                    if (task) {
-                        const linkName = LINK_TYPES[dep.msdyn_linktype] || 'FS';
-                        // msdyn_lagduration is stored in minutes in Dataverse → convert to working days
-                        const lagDays = dep.msdyn_lagduration
-                            ? Math.round(dep.msdyn_lagduration / minutesPerDay)
-                            : 0;
-                        task.predecessors.push({
-                            predecessorUID: predecessorUid,
-                            type: TYPE_CODES_DV[linkName] ?? 1,
-                            typeName: linkName,
-                            lag: lagDays,
-                        });
-                    } else {
-                        console.warn('[MSGraph] Orphaned dependency successor missing for dep:', dep.msdyn_projecttaskdependencyid);
-                    }
+                const successorId   = (dep._msdyn_successortask_value  || '').toLowerCase();
+                const predecessorId = (dep._msdyn_predecessortask_value || '').toLowerCase();
+
+                // Validate both endpoints exist before pushing
+                if (!dvIdToUid.has(successorId) || !dvIdToUid.has(predecessorId)) {
+                    console.warn('[MSGraph][Dataverse] Dependency references unknown task(s) — dep:',
+                        dep.msdyn_projecttaskdependencyid,
+                        '| successor found:', dvIdToUid.has(successorId),
+                        '| predecessor found:', dvIdToUid.has(predecessorId));
+                    return;
+                }
+
+                const successorUid   = dvIdToUid.get(successorId);
+                const predecessorUid = dvIdToUid.get(predecessorId);
+
+                const task = project.tasks.find(t => t.uid === successorUid);
+                if (task) {
+                    const linkName = LINK_TYPES[dep.msdyn_linktype] || 'FS';
+                    // msdyn_lagduration is stored in minutes in Dataverse → convert to working days
+                    const lagDays = dep.msdyn_lagduration
+                        ? Math.round(dep.msdyn_lagduration / minutesPerDay)
+                        : 0;
+                    task.predecessors.push({
+                        predecessorUID: predecessorUid,
+                        type: TYPE_CODES_DV[linkName] ?? 1,
+                        typeName: linkName,
+                        lag: lagDays,
+                    });
                 } else {
-                    console.warn('[MSGraph] Orphaned dependency endpoints missing for dep:', dep.msdyn_projecttaskdependencyid);
+                    console.warn('[MSGraph][Dataverse] Successor task not found in project for dep:', dep.msdyn_projecttaskdependencyid);
                 }
             });
 
             const totalDeps = project.tasks.reduce((sum, t) => sum + t.predecessors.length, 0);
             console.log(`[Dataverse] Resolved ${totalDeps} predecessor relationships from ${dvDeps.length} dependencies`);
+
+            if (totalDeps === 0 && dvDeps.length > 0) {
+                console.warn('[MSGraph][Dataverse] Dependency records found but none resolved — check that task GUIDs match between msdyn_projecttaskdependencies and msdyn_projecttasks');
+            }
+        } else {
+            // ⚠️ Dependency endpoint unavailable — flag it so the UI can surface a banner
+            project._dependenciesAvailable = false;
+            const depStatus = depResp?.status || 'caught-error';
+            console.warn(
+                `[MSGraph][Dataverse] Dependency endpoint unavailable (HTTP ${depStatus}).`
+                + ' Network/PERT diagram will show tasks as unlinked nodes.'
+                + ' To fix: ask your Microsoft 365 admin to enable Project Operations'
+                + ' or grant the service account read access to msdyn_projecttaskdependencies.'
+            );
         }
 
         return project;
@@ -1733,9 +1761,19 @@ function _getMsal() {
             const totalDeps = project.tasks.reduce((sum, t) => sum + t.predecessors.length, 0);
             console.log(`[MSGraph] Final predecessor count: ${totalDeps}`);
 
+            // Mark whether actual dependency links were resolved
+            project._dependenciesAvailable = totalDeps > 0;
             if (totalDeps === 0) {
-                console.log('[MSGraph] No Dataverse dependencies — Network/PERT will use WBS-based layout');
+                console.warn('[MSGraph] No Dataverse task dependencies resolved.'
+                    + ' Network/PERT will show tasks as unlinked nodes.'
+                    + ' Verify that msdyn_projecttaskdependencies contains records for this project'
+                    + ' and that the service account has read access.');
             }
+        } else {
+            // Dataverse hierarchy was not available — no way to fetch dependencies
+            project._dependenciesAvailable = false;
+            console.warn('[MSGraph] Dataverse hierarchy unavailable — Network/PERT will show unlinked tasks.'
+                + ' This typically means Project Operations is not licensed or Dataverse is not configured for this tenant.');
         }
 
         return project;
@@ -1769,10 +1807,13 @@ function _getMsal() {
 
     /**
      * Convert a Dataverse msdyn_duration (stored in minutes, 8 h/day) to working days.
-     * Falls back to _workingDaysBetween when duration is absent or zero.
+     * Falls back to _workingDaysBetween when duration is absent, zero, NaN, or non-numeric.
+     *
+     * Explicit typeof + isFinite guards prevent NaN propagation into the CPM engine
+     * when the Dataverse field contains a null/undefined/string value.
      */
     function _dvDurationDays(durationMinutes, startStr, finishStr) {
-        if (durationMinutes && durationMinutes > 0) {
+        if (typeof durationMinutes === 'number' && isFinite(durationMinutes) && durationMinutes > 0) {
             return Math.max(1, Math.round(durationMinutes / 480)); // 480 min = 8 h
         }
         return _workingDaysBetween(startStr, finishStr);

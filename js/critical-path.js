@@ -85,13 +85,27 @@
 
             t.predecessors.forEach(pred => {
                 const predTask = taskMap.get(pred.predecessorUID);
-                if (!predTask) return;
+                if (!predTask) {
+                    // Stale or cross-project reference — log so the user can audit
+                    console.warn(`[CPM] predecessorUID=${pred.predecessorUID} not found in taskMap`
+                        + ` — predecessor link on "${t.name}" (uid=${t.uid}) skipped.`
+                        + ' This may be a stale reference from a deleted or renamed task.');
+                    return;
+                }
 
                 let targetUid = pred.predecessorUID;
                 if (predTask.summary) {
                     // Replace summary with its last leaf child
                     const leafUid = summaryLastLeaf.get(pred.predecessorUID);
-                    if (!leafUid) return; // no leaf found — skip
+                    if (!leafUid) {
+                        // Summary has no non-summary descendants (fully-nested structure).
+                        // Cannot resolve to a leaf — log and skip to avoid a dangling reference.
+                        console.warn(`[CPM] Summary uid=${pred.predecessorUID} "${predTask.name}"`
+                            + ` has no non-summary leaf descendants`
+                            + ` — predecessor link from "${t.name}" (uid=${t.uid}) skipped.`
+                            + ' Check that the summary contains at least one leaf task.');
+                        return;
+                    }
                     targetUid = leafUid;
                 }
 
