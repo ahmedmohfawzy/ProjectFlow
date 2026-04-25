@@ -753,7 +753,7 @@ function _getMsal() {
                         const taskFilter = taskIds.map(id => `_msdyn_successortask_value eq '${id}'`).join(' or ');
                         const depFallbackUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies`
                             + `?$filter=${taskFilter}`
-                            + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype`
+                            + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype,msdyn_lagduration`
                             + `&$top=500`;
                         const depFallback = await fetch(depFallbackUrl, { method: 'GET', headers: dvHeaders }).catch(() => null);
                         if (depFallback && depFallback.ok) {
@@ -770,8 +770,9 @@ function _getMsal() {
             if (dvDeps.length > 0) {
                 const LINK_TYPES = { 192350000: 'FS', 192350001: 'FF', 192350002: 'SS', 192350003: 'SF' };
                 dvDeps.forEach(dep => {
-                    const successorId = dep._msdyn_successortask_value;
-                    const predecessorId = dep._msdyn_predecessortask_value;
+                    // dvMap keys are lowercased — normalise GUIDs to match
+                    const successorId  = (dep._msdyn_successortask_value  || '').toLowerCase();
+                    const predecessorId = (dep._msdyn_predecessortask_value || '').toLowerCase();
                     if (successorId && predecessorId && dvMap.has(successorId)) {
                         dvMap.get(successorId).dvPredecessors.push({
                             dvTaskId: predecessorId,
@@ -1047,7 +1048,7 @@ function _getMsal() {
                 { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
-                + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype`
+                + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype,msdyn_lagduration`
                 + `&$top=500`,
                 { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projects`
@@ -1187,6 +1188,9 @@ function _getMsal() {
             name: projectTitle || 'Dataverse Project',
             startDate: null,
             finishDate: null,
+            minutesPerDay: 480,
+            minutesPerWeek: 2400,
+            daysPerMonth: 20,
             tasks: [],
             resources: [...resourceSet.values()],
             assignments: [],
@@ -1247,7 +1251,7 @@ function _getMsal() {
                 predecessors: [],
                 isExpanded: true,
                 isVisible: true,
-                _dataverseTaskId: t.msdyn_projecttaskid,
+                _dataverseTaskId: (t.msdyn_projecttaskid || '').toLowerCase(),
             });
 
             // Track project date range
@@ -1267,24 +1271,31 @@ function _getMsal() {
                 if (t._dataverseTaskId) dvIdToUid.set(t._dataverseTaskId, t.uid);
             });
 
+            const TYPE_CODES_DV = { FS: 1, FF: 0, SS: 3, SF: 2 };
+            const minutesPerDay = project.minutesPerDay || 480;
             dvDeps.forEach(dep => {
-                const successorUid = dvIdToUid.get(dep._msdyn_successortask_value);
-                const predecessorUid = dvIdToUid.get(dep._msdyn_predecessortask_value);
+                // Normalise GUIDs to lowercase to match dvIdToUid keys
+                const successorUid  = dvIdToUid.get((dep._msdyn_successortask_value  || '').toLowerCase());
+                const predecessorUid = dvIdToUid.get((dep._msdyn_predecessortask_value || '').toLowerCase());
                 if (successorUid && predecessorUid) {
                     const task = project.tasks.find(t => t.uid === successorUid);
                     if (task) {
                         const linkName = LINK_TYPES[dep.msdyn_linktype] || 'FS';
-                        const TYPE_CODES = { FS: 1, FF: 0, SS: 3, SF: 2 };
+                        // msdyn_lagduration is stored in minutes in Dataverse → convert to working days
+                        const lagDays = dep.msdyn_lagduration
+                            ? Math.round(dep.msdyn_lagduration / minutesPerDay)
+                            : 0;
                         task.predecessors.push({
                             predecessorUID: predecessorUid,
-                            type: TYPE_CODES[linkName] ?? 1,
+                            type: TYPE_CODES_DV[linkName] ?? 1,
                             typeName: linkName,
+                            lag: lagDays,
                         });
                     } else {
-                        console.warn('[MSGraph] Orphaned dependency successor missing for dep:', dep.msdyn_projectdependencyid);
+                        console.warn('[MSGraph] Orphaned dependency successor missing for dep:', dep.msdyn_projecttaskdependencyid);
                     }
                 } else {
-                    console.warn('[MSGraph] Orphaned dependency endpoints missing for dep:', dep.msdyn_projectdependencyid);
+                    console.warn('[MSGraph] Orphaned dependency endpoints missing for dep:', dep.msdyn_projecttaskdependencyid);
                 }
             });
 
@@ -1685,10 +1696,12 @@ function _getMsal() {
             console.log(`[MSGraph] Predecessor resolution: ${dvIdToUid.size} tasks with DV IDs`);
 
             // Count how many tasks have dvPredecessors from Dataverse
+            // NOTE: dataverseHierarchy is keyed by Dataverse task GUIDs (lowercase), not Planner IDs
+            //       so we must use t._dvTaskId (the Dataverse GUID) — NOT t._plannerId
             let dvPredCount = 0;
             project.tasks.forEach(t => {
                 if (!t._dvTaskId) return;
-                const dvInfo = dataverseHierarchy.get(t._plannerId);
+                const dvInfo = dataverseHierarchy.get(t._dvTaskId);
                 if (dvInfo?.dvPredecessors?.length > 0) dvPredCount += dvInfo.dvPredecessors.length;
             });
             console.log(`[MSGraph] Dataverse dvPredecessors found: ${dvPredCount}`);
@@ -1696,7 +1709,7 @@ function _getMsal() {
             // For each task with Dataverse info, resolve its predecessor references
             project.tasks.forEach(t => {
                 if (!t._dvTaskId) return;
-                const dvInfo = dataverseHierarchy.get(t._plannerId);
+                const dvInfo = dataverseHierarchy.get(t._dvTaskId);  // keyed by DV GUID, not Planner ID
                 if (!dvInfo || !dvInfo.dvPredecessors || dvInfo.dvPredecessors.length === 0) return;
 
                 dvInfo.dvPredecessors.forEach(pred => {

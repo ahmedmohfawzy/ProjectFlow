@@ -223,15 +223,39 @@
         });
 
         /* ──────── PASS 4: resolve dependencies ──────── */
+        // Dependency format from MS Planner/Project Excel export:
+        //   "3FS"         → task 3, Finish-to-Start, lag 0
+        //   "3FS+2"       → task 3, Finish-to-Start, lag +2 days
+        //   "9FS, 10FS"   → two predecessors
+        //   "3"           → task 3, FS assumed (older/simple format)
+        // Regex: leading number + optional link type (FS/FF/SS/SF) + optional lag (±N)
+        const DEP_RE = /^(\d+)\s*(FS|FF|SS|SF)?\s*([+\-]\s*\d+)?$/i;
+        const LINK_TYPE_CODE = { FS: 1, FF: 0, SS: 3, SF: 2 };
+
         project.tasks.forEach(t => {
             if (t._rawDeps) {
-                const depNums = t._rawDeps.split(/[,;]/).map(s => s.trim()).filter(Boolean);
-                depNums.forEach(num => {
-                    let pUID = taskNumMap.get(num);
-                    if (!pUID && /^\d+$/.test(num)) pUID = parseInt(num); // Fallback to raw integer ONLY if strictly numeric
-                    if (pUID && !isNaN(pUID) && pUID !== t.uid) {
-                        t.predecessors.push({ predecessorUID: pUID, type: 1, typeName: 'FS', lag: 0 });
-                    }
+                const parts = t._rawDeps.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+                parts.forEach(part => {
+                    const m = part.match(DEP_RE);
+                    if (!m) return; // unrecognised format — skip
+
+                    const taskNumStr = m[1];                               // e.g. "3"
+                    const linkType   = (m[2] || 'FS').toUpperCase();       // e.g. "FS"
+                    const lagDays    = m[3] ? parseInt(m[3].replace(/\s/g,'')) : 0;
+
+                    // Resolve task number → UID via taskNumMap (stores String keys)
+                    let pUID = taskNumMap.get(taskNumStr)
+                            || taskNumMap.get(String(parseInt(taskNumStr)));
+
+                    if (!pUID) return; // predecessor not found in this project
+                    if (pUID === t.uid) return; // self-loop guard
+
+                    t.predecessors.push({
+                        predecessorUID: pUID,
+                        type: LINK_TYPE_CODE[linkType] ?? 1,
+                        typeName: linkType,
+                        lag: lagDays,
+                    });
                 });
             }
             delete t._rawDeps;
