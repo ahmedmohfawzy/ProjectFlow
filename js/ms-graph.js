@@ -1040,8 +1040,10 @@ function _getMsal() {
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projecttasks`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
                 + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_displaysequence,`
-                + `_msdyn_parenttask_value,msdyn_scheduledstart,msdyn_scheduledend,`
-                + `msdyn_duration,msdyn_progress,msdyn_effort,msdyn_description`
+                + `_msdyn_parenttask_value,msdyn_scheduledstart,msdyn_scheduledend,msdyn_scheduleddurationminutes,`
+                + `msdyn_progress,msdyn_effort,msdyn_effortcompleted,msdyn_effortremaining,`
+                + `msdyn_plannedcost,msdyn_actualcost,msdyn_iscritical,msdyn_ismilestone,`
+                + `msdyn_wbsid,msdyn_description`
                 + `&$orderby=msdyn_displaysequence asc&$top=500`,
                 { method: 'GET', headers: dvHeaders }),
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_resourceassignments`
@@ -1071,11 +1073,11 @@ function _getMsal() {
         const dvTeam = teamResp.ok ? ((await teamResp.json()).value || []) : [];
 
         // ── Fetch task dependencies (diagnostic-first, no assumed field names) ──
-        // Microsoft docs show field names that differ between tenants/versions:
-        //   C# SDK:         msdyn_predecessortask / msdyn_successortask (no 'id' suffix)
-        //   Some docs:      msdyn_predecessortaskid / msdyn_successortaskid
-        // Strategy: probe with 1 record (no $select) to discover real field names,
-        // then fetch all with the correct fields.
+        // Probe confirmed correct Dataverse field names:
+        //   _msdyn_predecessortask_value, _msdyn_successortask_value
+        //   msdyn_projecttaskdependencylinktype  (NOT msdyn_linktype — that doesn't exist)
+        //   msdyn_projecttaskdependencylinklaginseconds  (lag in seconds)
+        //   _msdyn_project_value  (can filter by project ID)
         const dvDepsAll = await (async () => {
             const taskGuidSet = new Set(
                 dvTasks.map(t => (t.msdyn_projecttaskid || '').toLowerCase()).filter(Boolean)
@@ -1091,9 +1093,10 @@ function _getMsal() {
             };
 
             // Step 1: probe — fetch 1 record with no $select to discover field names
-            let predField = '_msdyn_predecessortask_value';   // default assumption
-            let succField = '_msdyn_successortask_value';     // default assumption
-            let linkField = 'msdyn_linktype';
+            let predField = '_msdyn_predecessortask_value';        // confirmed by probe
+            let succField = '_msdyn_successortask_value';          // confirmed by probe
+            let linkField = 'msdyn_projecttaskdependencylinktype'; // confirmed by probe (NOT msdyn_linktype)
+            let lagField  = 'msdyn_projecttaskdependencylinklaginseconds'; // lag in seconds
 
             try {
                 const probeResp = await fetch(`${baseUrl}?$top=1`, { method: 'GET', headers: minHeaders });
@@ -1108,12 +1111,16 @@ function _getMsal() {
                     const keys = Object.keys(sample).filter(k => !k.startsWith('@'));
                     console.log('[Dataverse] Dependency entity fields:', keys.join(', '));
 
-                    // Auto-detect predecessor/successor field names
-                    if (keys.includes('_msdyn_predecessortaskid_value')) predField = '_msdyn_predecessortaskid_value';
-                    if (keys.includes('_msdyn_predecessortask_value'))   predField = '_msdyn_predecessortask_value';
-                    if (keys.includes('_msdyn_successortaskid_value'))   succField = '_msdyn_successortaskid_value';
-                    if (keys.includes('_msdyn_successortask_value'))     succField = '_msdyn_successortask_value';
-                    console.log(`[Dataverse] Using dep fields: pred=${predField}, succ=${succField}`);
+                    // Auto-detect predecessor/successor/link field name variants
+                    if (keys.includes('_msdyn_predecessortaskid_value'))           predField = '_msdyn_predecessortaskid_value';
+                    if (keys.includes('_msdyn_predecessortask_value'))             predField = '_msdyn_predecessortask_value';
+                    if (keys.includes('_msdyn_successortaskid_value'))             succField = '_msdyn_successortaskid_value';
+                    if (keys.includes('_msdyn_successortask_value'))               succField = '_msdyn_successortask_value';
+                    if (keys.includes('msdyn_projecttaskdependencylinktype'))      linkField = 'msdyn_projecttaskdependencylinktype';
+                    else if (keys.includes('msdyn_linktype'))                      linkField = 'msdyn_linktype';
+                    if (keys.includes('msdyn_projecttaskdependencylinklaginseconds')) lagField = 'msdyn_projecttaskdependencylinklaginseconds';
+                    else if (keys.includes('msdyn_projecttaskdependencylinklag'))  lagField = 'msdyn_projecttaskdependencylinklag';
+                    console.log(`[Dataverse] Using dep fields: pred=${predField}, succ=${succField}, link=${linkField}`);
                 } else {
                     console.log('[Dataverse] Dependency table accessible but empty — no predecessors defined');
                     return [];
@@ -1123,30 +1130,41 @@ function _getMsal() {
                 return [];
             }
 
-            // Step 2: fetch all deps with correct field names, filter client-side
+            // Step 2: fetch this project's deps with confirmed field names + project filter
             try {
-                const depUrl = `${baseUrl}?$select=msdyn_projecttaskdependencyid,${predField},${succField},${linkField}&$top=500`;
+                const depUrl = `${baseUrl}`
+                    + `?$filter=_msdyn_project_value eq '${projectId}'`
+                    + `&$select=msdyn_projecttaskdependencyid,${predField},${succField},${linkField},${lagField}`
+                    + `&$top=500`;
                 const resp = await fetch(depUrl, { method: 'GET', headers: minHeaders });
                 if (!resp.ok) {
-                    console.warn(`[Dataverse] Dependency fetch failed (HTTP ${resp.status})`);
-                    return [];
+                    console.warn(`[Dataverse] Dependency fetch failed (HTTP ${resp.status}) — falling back to no-filter fetch`);
+                    // Fallback: fetch all without filter, filter client-side
+                    const fbResp = await fetch(`${baseUrl}?$select=msdyn_projecttaskdependencyid,${predField},${succField},${linkField},${lagField}&$top=500`,
+                        { method: 'GET', headers: minHeaders });
+                    if (!fbResp || !fbResp.ok) return [];
+                    const fbData = await fbResp.json();
+                    const fbDeps = (fbData.value || []).filter(d => taskGuidSet.has((d[succField] || '').toLowerCase()));
+                    console.log(`[Dataverse] Fallback: ${fbDeps.length} deps for this project`);
+                    return fbDeps.map(d => normalize(d, predField, succField, linkField, lagField));
                 }
                 const data = await resp.json();
-                const allDeps = data.value || [];
-                const projectDeps = allDeps.filter(d =>
-                    taskGuidSet.has((d[succField] || '').toLowerCase())
-                );
-                console.log(`[Dataverse] Dependency fetch: ${allDeps.length} org-wide → ${projectDeps.length} for this project`);
-                // Normalize to consistent field names for wiring code downstream
-                return projectDeps.map(d => ({
-                    msdyn_projecttaskdependencyid: d.msdyn_projecttaskdependencyid,
-                    _msdyn_predecessortask_value:  d[predField] || '',
-                    _msdyn_successortask_value:    d[succField] || '',
-                    msdyn_linktype:                d[linkField],
-                }));
+                const deps = data.value || [];
+                console.log(`[Dataverse] Dependency fetch: ${deps.length} for this project (filtered by project ID)`);
+                return deps.map(d => normalize(d, predField, succField, linkField, lagField));
             } catch (e) {
                 console.warn('[Dataverse] Dependency fetch error:', e.message);
                 return [];
+            }
+
+            function normalize(d, pf, sf, lf, lagf) {
+                return {
+                    msdyn_projecttaskdependencyid: d.msdyn_projecttaskdependencyid,
+                    _msdyn_predecessortask_value:  (d[pf]   || '').toLowerCase(),
+                    _msdyn_successortask_value:    (d[sf]   || '').toLowerCase(),
+                    msdyn_linktype:                d[lf],
+                    lagSeconds:                    Number(d[lagf]) || 0,
+                };
             }
         })();
         const projEntityData = projEntityResp.ok ? ((await projEntityResp.json()).value || []) : [];
@@ -1322,10 +1340,10 @@ function _getMsal() {
                 uid: taskUid,
                 id: taskUid,
                 name: t.msdyn_subject || 'Untitled',
-                wbs: dvInfo?.wbsId || undefined,
-                outlineLevel: dvInfo?.outlineLevel || 1,
+                wbs: dvInfo?.wbsId || t.msdyn_wbsid || undefined,
+                outlineLevel: dvInfo?.outlineLevel || t.msdyn_outlinelevel || 1,
                 summary: isSummary,
-                milestone: dur === 0,
+                milestone: t.msdyn_ismilestone || dur === 0,
                 start,
                 finish,
                 durationDays: dur,
@@ -1336,6 +1354,15 @@ function _getMsal() {
                 predecessors: [],
                 isExpanded: true,
                 isVisible: true,
+                isCritical: !!t.msdyn_iscritical,
+                
+                // Financials & Effort
+                plannedCost: t.msdyn_plannedcost || 0,
+                actualCost: t.msdyn_actualcost || 0,
+                plannedHours: t.msdyn_effort || 0,
+                actualHours: t.msdyn_effortcompleted || 0,
+                remainingHours: t.msdyn_effortremaining || 0,
+                
                 _dataverseTaskId: (t.msdyn_projecttaskid || '').toLowerCase(),
             });
 
@@ -1355,8 +1382,9 @@ function _getMsal() {
             project.tasks.forEach(t => { if (t._dataverseTaskId) dvIdToUid.set(t._dataverseTaskId, t.uid); });
 
             dvDepsAll.forEach(dep => {
-                const successorId   = (dep._msdyn_successortask_value  || '').toLowerCase();
-                const predecessorId = (dep._msdyn_predecessortask_value || '').toLowerCase();
+                // GUIDs already lowercased by normalize()
+                const successorId   = dep._msdyn_successortask_value  || '';
+                const predecessorId = dep._msdyn_predecessortask_value || '';
                 if (!dvIdToUid.has(successorId) || !dvIdToUid.has(predecessorId)) {
                     console.warn('[Dataverse] Dependency references unknown task(s):',
                         dep.msdyn_projecttaskdependencyid,
@@ -1369,11 +1397,13 @@ function _getMsal() {
                 const task = project.tasks.find(t => t.uid === successorUid);
                 if (task) {
                     const linkName = LINK_TYPES[dep.msdyn_linktype] || 'FS';
+                    // Real lag from Dataverse (lagSeconds confirmed in schema)
+                    const lagDays = dep.lagSeconds ? dep.lagSeconds / 60 / (project.minutesPerDay || 480) : 0;
                     task.predecessors.push({
                         predecessorUID: predecessorUid,
                         type: TYPE_CODES_DV[linkName] ?? 1,
                         typeName: linkName,
-                        lag: 0,
+                        lag: Math.round(lagDays * 100) / 100,
                     });
                 }
             });
