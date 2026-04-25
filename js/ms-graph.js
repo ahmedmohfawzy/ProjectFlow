@@ -1034,8 +1034,9 @@ function _getMsal() {
             Prefer: 'odata.include-annotations="OData.Community.Display.V1.FormattedValue"',
         };
 
-        // Fetch tasks, assignments, team, dependencies + project entity (for manager) in parallel
-        const [tasksResp, assignResp, teamResp, depResp, projEntityResp] = await Promise.all([
+        // Fetch tasks, assignments, team + project entity in parallel
+        // NOTE: dependency fetch runs AFTER tasks are loaded (chunked by task GUIDs)
+        const [tasksResp, assignResp, teamResp, projEntityResp] = await Promise.all([
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projecttasks`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
                 + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_displaysequence,`
@@ -1053,11 +1054,6 @@ function _getMsal() {
                 + `&$select=msdyn_projectteamid,msdyn_name,_msdyn_bookableresourceid_value`
                 + `&$top=100`,
                 { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
-            fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies`
-                + `?$filter=_msdyn_project_value eq '${projectId}'`
-                + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype`
-                + `&$top=500`,
-                { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projects`
                 + `?$filter=msdyn_projectid eq '${projectId}'`
                 + `&$select=msdyn_subject,_msdyn_projectmanager_value`
@@ -1073,6 +1069,33 @@ function _getMsal() {
         const dvTasks = (await tasksResp.json()).value || [];
         const dvAssignments = assignResp.ok ? ((await assignResp.json()).value || []) : [];
         const dvTeam = teamResp.ok ? ((await teamResp.json()).value || []) : [];
+
+        // ── Fetch task dependencies (chunked by successor task GUIDs) ──
+        // Planner Premium does NOT expose _msdyn_project_value on the dependency table
+        // → filtering by project ID causes HTTP 400.  Instead we filter by the
+        // successor task GUIDs we already know, in parallel batches of 30.
+        const dvDepsAll = await (async () => {
+            const taskGuids = dvTasks.map(t => (t.msdyn_projecttaskid || '').toLowerCase()).filter(Boolean);
+            if (!taskGuids.length) return [];
+            const CHUNK = 30;
+            const depSelect = '$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype';
+            const chunks = [];
+            for (let i = 0; i < taskGuids.length; i += CHUNK) {
+                const ids = taskGuids.slice(i, i + CHUNK);
+                const filter = ids.map(id => `_msdyn_successortask_value eq '${id}'`).join(' or ');
+                chunks.push(
+                    fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies?$filter=${filter}&${depSelect}&$top=500`,
+                        { method: 'GET', headers: dvHeaders })
+                        .then(r => r.ok ? r.json() : { value: [] })
+                        .then(d => d.value || [])
+                        .catch(() => [])
+                );
+            }
+            const results = await Promise.all(chunks);
+            const flat = results.flat();
+            console.log(`[Dataverse] Dependency chunked fetch: ${flat.length} records from ${chunks.length} chunk(s)`);
+            return flat;
+        })();
         const projEntityData = projEntityResp.ok ? ((await projEntityResp.json()).value || []) : [];
         const projEntity = projEntityData[0] || null;
         const _projectManagerResourceId = projEntity ? projEntity['_msdyn_projectmanager_value'] : null;
@@ -1268,72 +1291,48 @@ function _getMsal() {
             if (!project.finishDate || finish > project.finishDate) project.finishDate = finish;
         });
 
-        // ── Parse and resolve task dependencies for Network/PERT ──
-        if (depResp.ok) {
-            // ✅ Dependency endpoint reachable — mark project so UI can show live network
+        // ── Wire task dependencies into predecessors[] ──
+        if (dvDepsAll.length > 0) {
             project._dependenciesAvailable = true;
-
-            const depData = await depResp.json();
-            const dvDeps = depData.value || [];
-            const LINK_TYPES = { 192350000: 'FS', 192350001: 'FF', 192350002: 'SS', 192350003: 'SF' };
-
-            // Build DV task ID → ProjectFlow UID mapping
-            const dvIdToUid = new Map();
-            project.tasks.forEach(t => {
-                if (t._dataverseTaskId) dvIdToUid.set(t._dataverseTaskId, t.uid);
-            });
-
+            const LINK_TYPES    = { 192350000: 'FS', 192350001: 'FF', 192350002: 'SS', 192350003: 'SF' };
             const TYPE_CODES_DV = { FS: 1, FF: 0, SS: 3, SF: 2 };
-            const minutesPerDay = project.minutesPerDay || 480;
-            dvDeps.forEach(dep => {
-                // Normalise GUIDs to lowercase to match dvIdToUid keys
+
+            // Map: DV task GUID (lowercase) → ProjectFlow UID
+            const dvIdToUid = new Map();
+            project.tasks.forEach(t => { if (t._dataverseTaskId) dvIdToUid.set(t._dataverseTaskId, t.uid); });
+
+            dvDepsAll.forEach(dep => {
                 const successorId   = (dep._msdyn_successortask_value  || '').toLowerCase();
                 const predecessorId = (dep._msdyn_predecessortask_value || '').toLowerCase();
-
-                // Validate both endpoints exist before pushing
                 if (!dvIdToUid.has(successorId) || !dvIdToUid.has(predecessorId)) {
-                    console.warn('[MSGraph][Dataverse] Dependency references unknown task(s) — dep:',
+                    console.warn('[Dataverse] Dependency references unknown task(s):',
                         dep.msdyn_projecttaskdependencyid,
                         '| successor found:', dvIdToUid.has(successorId),
                         '| predecessor found:', dvIdToUid.has(predecessorId));
                     return;
                 }
-
                 const successorUid   = dvIdToUid.get(successorId);
                 const predecessorUid = dvIdToUid.get(predecessorId);
-
                 const task = project.tasks.find(t => t.uid === successorUid);
                 if (task) {
                     const linkName = LINK_TYPES[dep.msdyn_linktype] || 'FS';
-                    // lag not available in Planner Premium (msdyn_lagduration requires Project Operations)
-                    const lagDays = 0;
                     task.predecessors.push({
                         predecessorUID: predecessorUid,
                         type: TYPE_CODES_DV[linkName] ?? 1,
                         typeName: linkName,
-                        lag: lagDays,
+                        lag: 0,
                     });
-                } else {
-                    console.warn('[MSGraph][Dataverse] Successor task not found in project for dep:', dep.msdyn_projecttaskdependencyid);
                 }
             });
 
-            const totalDeps = project.tasks.reduce((sum, t) => sum + t.predecessors.length, 0);
-            console.log(`[Dataverse] Resolved ${totalDeps} predecessor relationships from ${dvDeps.length} dependencies`);
-
-            if (totalDeps === 0 && dvDeps.length > 0) {
-                console.warn('[MSGraph][Dataverse] Dependency records found but none resolved — check that task GUIDs match between msdyn_projecttaskdependencies and msdyn_projecttasks');
+            const totalDeps = project.tasks.reduce((s, t) => s + t.predecessors.length, 0);
+            console.log(`[Dataverse] Resolved ${totalDeps} predecessor links from ${dvDepsAll.length} dependency records`);
+            if (totalDeps === 0 && dvDepsAll.length > 0) {
+                console.warn('[Dataverse] Deps fetched but none resolved — GUID mismatch between dependency records and task list');
             }
         } else {
-            // ⚠️ Dependency endpoint unavailable — flag it so the UI can surface a banner
             project._dependenciesAvailable = false;
-            const depStatus = depResp?.status || 'caught-error';
-            console.warn(
-                `[MSGraph][Dataverse] Dependency endpoint unavailable (HTTP ${depStatus}).`
-                + ' Network/PERT diagram will show tasks as unlinked nodes.'
-                + ' To fix: ask your Microsoft 365 admin to enable Project Operations'
-                + ' or grant the service account read access to msdyn_projecttaskdependencies.'
-            );
+            console.log('[Dataverse] No dependency records found — plan may have no predecessors defined in Project for the Web');
         }
 
         return project;
