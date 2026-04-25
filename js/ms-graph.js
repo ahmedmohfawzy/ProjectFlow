@@ -769,21 +769,40 @@ function _getMsal() {
 
             if (dvDeps.length > 0) {
                 const LINK_TYPES = { 192350000: 'FS', 192350001: 'FF', 192350002: 'SS', 192350003: 'SF' };
+                let depStored = 0, depSkippedNoSucc = 0, depSkippedNoPred = 0;
                 dvDeps.forEach(dep => {
                     // dvMap keys are lowercased — normalise GUIDs to match
-                    const successorId  = (dep._msdyn_successortask_value  || '').toLowerCase();
+                    const successorId   = (dep._msdyn_successortask_value  || '').toLowerCase();
                     const predecessorId = (dep._msdyn_predecessortask_value || '').toLowerCase();
-                    if (successorId && predecessorId && dvMap.has(successorId)) {
-                        dvMap.get(successorId).dvPredecessors.push({
-                            dvTaskId: predecessorId,
-                            linkType: LINK_TYPES[dep.msdyn_linktype] || 'FS',
-                            lagMinutes: dep.msdyn_lagduration || 0, // in minutes from Dataverse
-                        });
+                    if (!successorId || !predecessorId) { depSkippedNoSucc++; return; }
+                    if (!dvMap.has(successorId)) {
+                        // Successor not in dvMap — task may have been filtered or deleted
+                        depSkippedNoSucc++;
+                        return;
                     }
+                    dvMap.get(successorId).dvPredecessors.push({
+                        dvTaskId:   predecessorId,
+                        linkType:   LINK_TYPES[dep.msdyn_linktype] || 'FS',
+                        lagMinutes: dep.msdyn_lagduration || 0, // in minutes from Dataverse
+                    });
+                    depStored++;
+                    // Note: predecessorId is stored but not validated against dvMap here.
+                    // Validation happens later in the Planner-task-to-ProjectFlow-task pass.
+                    if (!dvMap.has(predecessorId)) depSkippedNoPred++;
                 });
-                console.log(`[MSGraph] Parsed ${dvDeps.length} task dependencies for Network/PERT`);
+                console.log(
+                    `[MSGraph] Dependency parse: ${dvDeps.length} total → `
+                    + `${depStored} stored, ${depSkippedNoSucc} skipped (successor not in task list)`
+                    + (depSkippedNoPred > 0
+                        ? `, ⚠️ ${depSkippedNoPred} predecessors not in dvMap (cross-project or deleted tasks)`
+                        : '')
+                );
+                if (depStored === 0) {
+                    console.warn('[MSGraph] ⚠️ No dependencies stored despite records existing — all successor task GUIDs are unknown.'
+                        + ' This usually means Planner task IDs are not linked to Dataverse task GUIDs via creationSource.externalObjectId.');
+                }
             } else {
-                console.log('[MSGraph] No task dependencies found in Dataverse (Network/PERT will show unlinked tasks)');
+                console.log('[MSGraph] No task dependencies found in Dataverse — plan may have no predecessors set in Project for the Web.');
             }
 
             // Auto-generate WBS IDs from parent-child tree
