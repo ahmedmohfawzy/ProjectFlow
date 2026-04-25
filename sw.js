@@ -5,8 +5,8 @@
  */
 'use strict';
 
-const CACHE_NAME    = 'projectflow-v5';   // ← bumped: force old SW to expire
-const CACHE_VERSION = '5.0.0';
+const CACHE_NAME    = 'projectflow-v6';   // ← bumped: force refresh after Dataverse fix
+const CACHE_VERSION = '6.0.0';
 
 // Assets to cache on install (App Shell)
 const SHELL_ASSETS = [
@@ -92,17 +92,17 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // 3. JS/CSS assets → cache-first (they change with cache version bump)
+    // 3. JS/CSS assets → network-first (always serve latest code)
     event.respondWith(
-        caches.match(request).then(cached => {
-            if (cached) return cached;
-            return fetch(request).then(response => {
-                if (response.ok) {
-                    const cloned = response.clone();
-                    caches.open(CACHE_NAME).then(c => c.put(request, cloned));
-                }
-                return response;
-            }).catch(() => new Response('Offline', { status: 503 }));
+        fetch(request, { cache: 'no-store' }).then(response => {
+            if (response.ok) {
+                const cloned = response.clone();
+                caches.open(CACHE_NAME).then(c => c.put(request, cloned));
+            }
+            return response;
+        }).catch(() => {
+            return caches.match(request)
+                .then(cached => cached || new Response('Offline', { status: 503 }));
         })
     );
 });

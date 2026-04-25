@@ -42,9 +42,9 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="ProjectFlow">
-  <script type="module" crossorigin src="/ProjectFlow/assets/main-Bt36cxZZ.js"></script>
-  <link rel="modulepreload" crossorigin href="/ProjectFlow/assets/PublicClientApplication-D80GVUWi.js">
-  <link rel="stylesheet" crossorigin href="/ProjectFlow/assets/main-lrUfVRzb.css">
+  <script type="module" crossorigin src="/ProjectFlow/assets/main-Bdu8y9_X.js"></script>
+  <link rel="modulepreload" crossorigin href="/ProjectFlow/assets/modulepreload-polyfill-wMinxHhO.js">
+  <link rel="stylesheet" crossorigin href="/ProjectFlow/assets/main-Bw_rbSpr.css">
 </head>
 <body>
     <!-- ═══════════════ TOP NAV BAR ═══════════════ -->
@@ -528,7 +528,7 @@
                     </div>
                 </div>
                 <div class="calendar-info-bar">
-                    <span id="calPresetLabel" class="cal-preset-tag">Western (Mon-Fri)</span>
+                    <span id="calPresetLabel" class="cal-preset-tag">Egypt (Sun-Thu)</span>
                     <span id="calHolidayCount" class="cal-holiday-tag">0 holidays loaded</span>
                     <span id="calCountryFlags"></span>
                 </div>
@@ -1087,6 +1087,7 @@
         </div>
         <div class="footer-right">
             <span id="autoSaveStatus" class="auto-save-status">💾 Auto-saved</span>
+            <span id="syncStatus" class="sync-status hidden" title="Planner Sync Status">🔄 —</span>
             <span id="storageIndicator" class="auto-save-status" style="margin-left:6px;font-size:0.65rem;opacity:0.7">📦 Browser</span>
             <div class="divider-v"></div>
             <button class="btn btn-ghost btn-xs" id="btnZoomIn" title="Zoom In" disabled>+</button>
@@ -1515,8 +1516,9 @@
     <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.7/dist/dexie.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.26.1/lib/msal-browser.min.js"></script>
 
-    <!-- Microsoft Teams SDK (MSAL is now bundled via npm — no CDN needed) -->
+    <!-- Microsoft Teams SDK -->
     <script src="https://res.cdn.office.net/teams-js/2.24.0/js/MicrosoftTeams.min.js"></script>
 
     <!-- Sprint B.3: Modular architecture (Vite ESM Entry) -->
