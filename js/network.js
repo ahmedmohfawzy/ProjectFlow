@@ -126,7 +126,65 @@
     function zoomIn()            { _zoom(_scale * 1.2); }
     function zoomOut()           { _zoom(_scale / 1.2); }
     function fitToScreen()       { _fit(); }
-    function exportPNG()         { const a = document.createElement('a'); a.download = 'network.png'; a.href = _canvas.toDataURL('image/png'); a.click(); }
+    function exportPNG() {
+        if (!_nodes.length) return;
+
+        // ── Compute tight bounding box around all nodes ──
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        _nodes.forEach(n => {
+            x0 = Math.min(x0, n.x);
+            y0 = Math.min(y0, n.y);
+            x1 = Math.max(x1, n.x + n.w);
+            y1 = Math.max(y1, n.y + n.h);
+        });
+
+        const PAD    = 40;
+        const bW     = x1 - x0 + PAD * 2;
+        const bH     = y1 - y0 + PAD * 2;
+
+        // Target max dimensions for the exported PNG
+        const MAX_W  = 3840, MAX_H = 2160;
+        const scale  = Math.min(1, MAX_W / bW, MAX_H / bH);
+        const outW   = Math.ceil(bW * scale);
+        const outH   = Math.ceil(bH * scale);
+
+        // ── Draw to an offscreen canvas ──
+        const off  = document.createElement('canvas');
+        off.width  = outW;
+        off.height = outH;
+        const ctx  = off.getContext('2d');
+
+        // Background
+        ctx.fillStyle = C.bg || '#0f1117';
+        ctx.fillRect(0, 0, outW, outH);
+
+        // Dot grid
+        ctx.fillStyle = 'rgba(255,255,255,0.025)';
+        for (let x = 28; x < outW; x += 28)
+            for (let y = 28; y < outH; y += 28) {
+                ctx.beginPath(); ctx.arc(x, y, 1, 0, Math.PI * 2); ctx.fill();
+            }
+
+        // Apply transform: translate so x0/y0 maps to PAD, then scale
+        ctx.save();
+        ctx.translate((-x0 + PAD) * scale, (-y0 + PAD) * scale);
+        ctx.scale(scale, scale);
+
+        // Swap the real context temporarily so _draw* helpers use our offscreen ctx
+        const realCtx = _ctx;
+        _ctx = ctx;
+        _edges.forEach(e => _drawEdge(e, false));
+        _nodes.forEach(n => _drawNode(n, false));
+        _ctx = realCtx;
+
+        ctx.restore();
+
+        // ── Download ──
+        const a = document.createElement('a');
+        a.download = 'network-diagram.png';
+        a.href = off.toDataURL('image/png');
+        a.click();
+    }
     function render()            { _draw(); }
     function getStats()          { return _statsCache; }
 
