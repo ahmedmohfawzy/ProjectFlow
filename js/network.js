@@ -154,9 +154,12 @@
         const bottlenecks = _tasks.filter(t => (_succMap.get(t.uid)||[]).length >= 3);
         const floatValues = _tasks.map(t => t.totalFloat).filter(v => v != null && isFinite(v));
         const avgFloat   = floatValues.length ? Math.round(floatValues.reduce((a,b)=>a+b,0)/floatValues.length) : 0;
-        // Critical path length = project end date (max EF across all tasks), not sum of critical durations
-        const efValues = _allTasks.map(t => t._ef || 0).filter(v => isFinite(v));
-        const critPathLen = efValues.length ? Math.max(...efValues) : 0;
+        // Critical path length = max EF of CONNECTED tasks only
+        // Isolated tasks (no preds AND no succs) are excluded — they must not inflate the critical path
+        const connectedEFs = _allTasks.filter(t => !t._isolated).map(t => t._ef || 0).filter(v => isFinite(v));
+        const fallbackEFs  = _allTasks.map(t => t._ef || 0).filter(v => isFinite(v));
+        const efPool = connectedEFs.length ? connectedEFs : fallbackEFs;
+        const critPathLen = efPool.length ? Math.max(...efPool) : 0;
         _statsCache = { n, critCount: critTasks.length, lateCount: lateTasks.length, zeroFloatCount: zeroFloat.length, bottleneckCount: bottlenecks.length, avgFloat, critPathLen };
         // Update stats bar in toolbar
         _renderStatsBar();

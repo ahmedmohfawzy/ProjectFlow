@@ -29,6 +29,7 @@
         tasks.forEach(t => {
             t._es = 0; t._ef = 0; t._ls = Infinity; t._lf = Infinity;
             t._totalFloat = 0; t._freeFloat = 0; t._critical = false;
+            t._isolated = false; // will be set true for tasks with no preds AND no succs
             taskMap.set(t.uid, t);
         });
 
@@ -116,8 +117,25 @@
         });
 
         // ─── Backward Pass (compute LS, LF) ───
-        const efValues = tasks.filter(t => !t.summary).map(t => t._ef);
-        const projectEnd = efValues.length > 0 ? Math.max(...efValues) : 0;
+
+        // Identify isolated tasks: no predecessors AND no successors
+        // An isolated task far in the future must NOT define projectEnd for the whole network —
+        // otherwise every connected chain gets huge float and zero critical tasks.
+        const isolatedUids = new Set();
+        tasks.forEach(t => {
+            if (t.summary) return;
+            const hasPreds = t.predecessors && t.predecessors.length > 0;
+            const hasSuccs  = successors.get(t.uid) && successors.get(t.uid).length > 0;
+            if (!hasPreds && !hasSuccs) { isolatedUids.add(t.uid); t._isolated = true; }
+        });
+
+        // projectEnd = max EF of CONNECTED tasks only (at least one pred or succ)
+        // Falls back to overall max EF if no connected tasks exist
+        const connectedEFs = tasks.filter(t => !t.summary && !isolatedUids.has(t.uid)).map(t => t._ef);
+        const allEFs       = tasks.filter(t => !t.summary).map(t => t._ef);
+        const projectEnd   = (connectedEFs.length > 0 ? connectedEFs : allEFs)
+                                .filter(v => isFinite(v))
+                                .reduce((a, b) => Math.max(a, b), 0);
 
         // Reverse order
         for (let i = sorted.length - 1; i >= 0; i--) {
@@ -126,7 +144,9 @@
 
             const succs = successors.get(task.uid);
             if (!succs || succs.length === 0) {
-                task._lf = projectEnd;
+                // Isolated task: LF = its own EF → float = 0 (trivially on its own critical path)
+                // Terminal connected task: LF = network projectEnd
+                task._lf = isolatedUids.has(task.uid) ? task._ef : projectEnd;
                 task._ls = task._lf - Math.max(0, task.durationDays || 0); // Guard negative duration
             } else {
                 let lf = Infinity;
