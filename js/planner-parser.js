@@ -249,19 +249,23 @@
                 const m = part.match(DEP_RE);
 
                 if (!m) {
-                    // ── Fallback: try to match the leading text as a task name ──
-                    // e.g. "Design Phase FS+2" → name="Design Phase", type=FS, lag=2
-                    const nameFallback = part.match(/^(.+?)\s*(FS|FF|SS|SF)?\s*([+\-]\s*\d+)?$/i);
+                    // ── Fallback: try to match leading text as a task name ──
+                    // IMPORTANT: link type is MANDATORY and must be preceded by at
+                    // least ONE space (\s+) to prevent partial-word matches like
+                    // "Finish" containing "FS".  Bare names (no link type) never match.
+                    // Examples that DO    match: "Design Phase FS+2"
+                    // Examples that DON'T match: "Finishes", "Offshore"
+                    const nameFallback = part.match(/^(.+?)\s+(FS|FF|SS|SF)\s*([+\-]\s*\d+)?$/i);
                     const candidateName = nameFallback ? nameFallback[1].trim().toLowerCase() : part.toLowerCase();
                     const nameUid = nameToUid.get(candidateName);
 
                     if (nameUid && nameUid !== t.uid) {
                         const linkType = ((nameFallback && nameFallback[2]) || 'FS').toUpperCase();
-                        const lagDays  = (nameFallback && nameFallback[3])
-                            ? parseInt(nameFallback[3].replace(/\s/g,'')) : 0;
+                        const rawLag   = (nameFallback && nameFallback[3]) ? nameFallback[3].replace(/\s/g,'') : '0';
+                        const lagDays  = parseInt(rawLag, 10);
                         t.predecessors.push({
                             predecessorUID: nameUid,
-                            type: LINK_TYPE_CODE[linkType] ?? 1,
+                            type:     LINK_TYPE_CODE[linkType] ?? 1,
                             typeName: linkType,
                             lag: lagDays,
                         });
@@ -277,7 +281,10 @@
 
                 const taskNumStr = m[1];                               // e.g. "3" or "1.2.3"
                 const linkType   = (m[2] || 'FS').toUpperCase();       // e.g. "FS"
-                const lagDays    = m[3] ? parseInt(m[3].replace(/\s/g,'')) : 0;
+                // Phase 3 fix: sanitise lag to prevent NaN propagation
+                const rawLagStr  = m[3] ? m[3].replace(/\s/g,'') : '0';
+                const lagDays    = parseInt(rawLagStr, 10);
+                const lag        = isNaN(lagDays) ? 0 : lagDays;
 
                 // Resolve via taskNumMap (holds both "Task number" strings and outline strings)
                 let pUID = taskNumMap.get(taskNumStr)

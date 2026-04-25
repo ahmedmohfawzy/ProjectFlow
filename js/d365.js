@@ -314,22 +314,75 @@
 
     /**
      * Map Project Task (Operations) to ProjectFlow task
+     * Captures ALL scheduling, effort, cost, and WBS fields from Dataverse.
      */
     function _mapTaskOps(task) {
+        const durationDays = task.msdyn_scheduleddurationminutes
+            ? (task.msdyn_scheduleddurationminutes / 480)
+            : 0;
+
+        // Planned Hours = scheduled duration in hours (msdyn_effort or derived from minutes)
+        const plannedHours = task.msdyn_effort != null
+            ? task.msdyn_effort
+            : (task.msdyn_scheduleddurationminutes ? task.msdyn_scheduleddurationminutes / 60 : 0);
+
+        // Actual Hours already worked
+        const actualHours = task.msdyn_effortcompleted || 0;
+
+        // Remaining Effort in hours
+        const remainingHours = task.msdyn_effortremaining != null
+            ? task.msdyn_effortremaining
+            : Math.max(0, plannedHours - actualHours);
+
+        // Planned Cost from D365 budget line roll-up on task
+        const plannedCost = task.msdyn_plannedcost || 0;
+
+        // Actual Cost incurred so far
+        const actualCost = task.msdyn_actualcost || 0;
+
+        // WBS string (e.g. "1.2.3")
+        const wbs = task.msdyn_wbsid || '';
+
+        // Outline level derived from WBS dots if not provided
+        const outlineLevel = task.msdyn_outlinelevel ||
+            (wbs ? wbs.split('.').length : 1);
+
         return {
-            _d365Id: task.msdyn_projecttaskid,
-            name: task.msdyn_subject || 'Unnamed Task',
-            start: task.msdyn_scheduledstart ? new Date(task.msdyn_scheduledstart) : null,
-            finish: task.msdyn_scheduledend ? new Date(task.msdyn_scheduledend) : null,
-            durationDays: task.msdyn_scheduleddurationminutes ? (task.msdyn_scheduleddurationminutes / 480) : 0,
+            _d365Id:         task.msdyn_projecttaskid,
+            _d365SeqId:      task.msdyn_displaysequence, // used by dependency resolver
+            name:            task.msdyn_subject || 'Unnamed Task',
+            start:           task.msdyn_scheduledstart ? new Date(task.msdyn_scheduledstart) : null,
+            finish:          task.msdyn_scheduledend   ? new Date(task.msdyn_scheduledend)   : null,
+            durationDays,
             percentComplete: task.msdyn_progress || 0,
-            critical: task.msdyn_iscritical || false,
-            outlineLevel: task.msdyn_outlinelevel || 0,
-            milestone: task.msdyn_ismilestone || false,
-            cost: task.msdyn_effort ? (task.msdyn_effort * 8) : 0, // Convert hours to cost-hours
-            effortCompleted: task.msdyn_effortcompleted || 0,
-            description: task.msdyn_description || '',
-            wbsId: task.msdyn_wbsid || ''
+            critical:        task.msdyn_iscritical  || false,
+            outlineLevel,
+            outlineNumber:   wbs,
+            wbs,
+            milestone:       task.msdyn_ismilestone || false,
+            summary:         false,             // detected in importProject pass
+            notes:           task.msdyn_description || '',
+            // ── Effort ──────────────────────────────────────
+            plannedHours,
+            actualHours,
+            remainingHours,
+            effortCompleted: actualHours,
+            // ── Cost ────────────────────────────────────────
+            cost:            plannedCost,       // display in cost column
+            plannedCost,
+            actualCost,
+            costVariance:    plannedCost - actualCost,
+            // ── Predecessors (populated by importProject) ───
+            predecessors:    [],
+            resourceNames:   [],
+            isExpanded:      true,
+            isVisible:       true,
+            status:          'not-started',
+            statusIcon:      '⬜',
+            statusColor:     '#64748b',
+            tags: [], comments: [], attachments: [],
+            baselineStart: null, baselineFinish: null, baselineDuration: null,
+            totalFloat: null,   freeFloat: null
         };
     }
 
@@ -441,7 +494,31 @@
 
         try {
             if (config.mode === MODES.OPERATIONS) {
-                const query = `$filter=_msdyn_project_value eq (${projectId})&$select=msdyn_projecttaskid,msdyn_subject,msdyn_scheduledstart,msdyn_scheduledend,msdyn_scheduleddurationminutes,msdyn_progress,msdyn_effort,msdyn_effortcompleted,msdyn_iscritical,msdyn_outlinelevel,msdyn_ismilestone,msdyn_displaysequence,msdyn_description&$orderby=msdyn_displaysequence asc`;
+                // Fetch ALL relevant fields including effort, cost, WBS, and notes
+                const fields = [
+                    'msdyn_projecttaskid',
+                    'msdyn_subject',
+                    'msdyn_scheduledstart',
+                    'msdyn_scheduledend',
+                    'msdyn_scheduleddurationminutes',
+                    'msdyn_progress',
+                    'msdyn_effort',           // Planned Hours (total)
+                    'msdyn_effortcompleted',  // Actual Hours worked
+                    'msdyn_effortremaining',  // Remaining Hours
+                    'msdyn_plannedcost',      // Planned Cost ($)
+                    'msdyn_actualcost',       // Actual Cost ($)
+                    'msdyn_iscritical',       // Critical flag from D365 scheduler
+                    'msdyn_outlinelevel',     // WBS depth
+                    'msdyn_wbsid',            // WBS string ("1.2.3")
+                    'msdyn_ismilestone',
+                    'msdyn_displaysequence',  // Sort order (used by dep resolver)
+                    'msdyn_description'       // Task notes
+                ].join(',');
+
+                const query = `$filter=_msdyn_project_value eq (${projectId})` +
+                              `&$select=${fields}` +
+                              `&$orderby=msdyn_displaysequence asc`;
+
                 const allTasks = await fetchAllPages(ENTITIES.TASKS_OPS, query);
                 return allTasks.map(_mapTaskOps);
             } else {
@@ -452,6 +529,38 @@
         } catch (error) {
             console.error('Failed to fetch project tasks:', error);
             throw error;
+        }
+    }
+
+    /**
+     * Public: Get task dependencies (predecessor links) for a project
+     * Returns records from msdyn_projecttaskdependency
+     * Each record has: successorTaskId, predecessorTaskId, linkType (0=FS,1=FF,2=SS,3=SF)
+     */
+    async function getTaskDependencies(projectId) {
+        if (!config) throw new Error('D365 not configured');
+        if (config.mode !== MODES.OPERATIONS) return []; // F&O does not have this entity
+
+        try {
+            const query = `$filter=_msdyn_project_value eq (${projectId})` +
+                          `&$select=msdyn_projecttaskdependencyid,` +
+                          `_msdyn_successortask_value,_msdyn_predecessortask_value,msdyn_linktype`;
+
+            const allDeps = await fetchAllPages('msdyn_projecttaskdependencies', query);
+            return allDeps.map(d => ({
+                id:              d.msdyn_projecttaskdependencyid,
+                successorId:     d._msdyn_successortask_value,
+                predecessorId:   d._msdyn_predecessortask_value,
+                // Dataverse link type: 0=FS, 1=FF, 2=SS, 3=SF
+                linkTypeCode:    d.msdyn_linktype || 0,
+                typeName:        ['FS','FF','SS','SF'][d.msdyn_linktype || 0] || 'FS',
+                type:            [1, 0, 3, 2][d.msdyn_linktype || 0] ?? 1, // ProjectFlow codes
+                lag:             0
+            }));
+        } catch (error) {
+            // Non-fatal: log and return empty (project can still load without dependencies)
+            console.warn('[D365] Could not fetch task dependencies:', error.message);
+            return [];
         }
     }
 
@@ -647,6 +756,8 @@
 
     /**
      * Public: Import full project from D365
+     * Enhanced: fetches task dependencies and wires predecessors[] array,
+     * detects summary tasks from WBS hierarchy, and assigns sequential UIDs.
      */
     async function importProject(projectId) {
         if (!config) throw new Error('D365 not configured');
@@ -656,10 +767,81 @@
             const project = projects.find(p => p.id === projectId);
             if (!project) throw new Error(`Project ${projectId} not found`);
 
-            const tasks = await getProjectTasks(projectId);
-            const resources = await getResources();
-            const assignments = await getAssignments(projectId);
-            const budget = await getBudgetLines(projectId);
+            // ── Fetch all data in parallel for speed ──────────────────────
+            const [tasks, resources, assignments, budget, deps] = await Promise.all([
+                getProjectTasks(projectId),
+                getResources(),
+                getAssignments(projectId),
+                getBudgetLines(projectId),
+                getTaskDependencies(projectId)
+            ]);
+
+            // ── Assign sequential UIDs and build D365-ID → UID map ───────
+            const d365IdToUid = new Map(); // msdyn_projecttaskid → numeric uid
+            tasks.forEach((t, i) => {
+                t.uid = i + 1;
+                t.id  = i + 1;
+                if (t._d365Id) d365IdToUid.set(t._d365Id, t.uid);
+            });
+
+            // ── Detect summary tasks from WBS hierarchy ───────────────────
+            tasks.forEach(cur => {
+                if (cur.wbs) {
+                    cur.summary = tasks.some(t => t.wbs && t.wbs.startsWith(cur.wbs + '.'));
+                }
+            });
+
+            // ── Wire dependency records into task.predecessors[] ──────────
+            const missingDeps = [];
+            deps.forEach(dep => {
+                const succUID = d365IdToUid.get(dep.successorId);
+                const predUID = d365IdToUid.get(dep.predecessorId);
+                if (!succUID || !predUID) {
+                    missingDeps.push(dep.id);
+                    return;
+                }
+                if (succUID === predUID) return; // self-loop guard
+                const succTask = tasks[succUID - 1];
+                if (!succTask) return;
+                // Avoid duplicate links
+                const alreadyLinked = succTask.predecessors.some(
+                    p => p.predecessorUID === predUID
+                );
+                if (!alreadyLinked) {
+                    succTask.predecessors.push({
+                        predecessorUID: predUID,
+                        type:           dep.type,
+                        typeName:       dep.typeName,
+                        lag:            dep.lag || 0
+                    });
+                }
+            });
+            if (missingDeps.length) {
+                console.warn(`[D365] ${missingDeps.length} dependency record(s) could not be resolved (tasks may have been deleted).`);
+            }
+
+            // ── Wire resource assignments into task.resourceNames[] ───────
+            const assignMap = new Map(); // taskId (D365) → [resourceName, ...]
+            assignments.forEach(a => {
+                if (!assignMap.has(a.taskId)) assignMap.set(a.taskId, []);
+                assignMap.get(a.taskId).push(a.resourceName);
+            });
+            tasks.forEach(t => {
+                if (t._d365Id && assignMap.has(t._d365Id)) {
+                    t.resourceNames = assignMap.get(t._d365Id);
+                }
+            });
+
+            // ── Set global project dates ──────────────────────────────────
+            let gStart = Infinity, gFinish = -Infinity;
+            tasks.forEach(t => {
+                if (t.start)  { const ts = new Date(t.start).getTime();  if (ts < gStart)   gStart  = ts; }
+                if (t.finish) { const tf = new Date(t.finish).getTime(); if (tf > gFinish)  gFinish = tf; }
+            });
+            if (gStart  !== Infinity)   project.startDate  = new Date(gStart);
+            if (gFinish !== -Infinity)  project.finishDate = new Date(gFinish);
+
+            console.log(`[D365] Imported ${tasks.length} tasks, ${deps.length} dependencies, ${assignments.length} assignments.`);
 
             return {
                 ...project,
@@ -667,7 +849,8 @@
                 resources,
                 assignments,
                 budget,
-                importedAt: new Date()
+                importedAt: new Date(),
+                _lastSync:  new Date()
             };
         } catch (error) {
             console.error('Failed to import project:', error);
@@ -1187,6 +1370,7 @@
         isAuthenticated,
         getProjects,
         getProjectTasks,
+        getTaskDependencies,
         getResources,
         getAssignments,
         getBudgetLines,

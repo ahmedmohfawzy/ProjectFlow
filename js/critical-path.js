@@ -138,6 +138,31 @@
         /* ── 1. Resolve summary predecessors ── */
         _buildCpmPreds(tasks, taskMap);
 
+        /* ── 1b. Dependency health check ──
+         * After resolving preds, test whether ANY leaf task has a predecessor.
+         * If not — and there are at least 2 leaf tasks — the CPM result will
+         * technically be "every task is critical" which is misleading.
+         * Emit a warning and attach a _cpmWarning property on the tasks array
+         * so the UI layer can surface a user-visible notice.
+         */
+        const leafTasks = tasks.filter(t => !t.summary);
+        const resolvedPredCount = leafTasks.reduce((s, t) => s + (t._cpmPreds?.length || 0), 0);
+
+        if (leafTasks.length > 1 && resolvedPredCount === 0) {
+            const msg = `[CPM] No predecessor links resolved among ${leafTasks.length} leaf tasks.`
+                + ' All tasks will appear critical (TF = 0), which is technically correct'
+                + ' but may be misleading if dependencies exist in the source.'
+                + ' Possible causes: Dataverse unavailable (Scenario B), or unrecognised'
+                + ' dependency format in the Excel import (Scenario A).';
+            console.warn(msg);
+            // Expose on the array so callers (UI, network.js) can surface a banner
+            tasks._cpmWarning = msg;
+            tasks._cpmDepsAvailable = false;
+        } else {
+            delete tasks._cpmWarning;
+            tasks._cpmDepsAvailable = resolvedPredCount > 0 || leafTasks.length <= 1;
+        }
+
         /* ── 2. Build successors map (from resolved preds) ── */
         const successors = new Map(); // uid → [{ task, typeName, lag }]
         tasks.forEach(t => {

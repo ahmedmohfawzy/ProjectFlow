@@ -46,6 +46,27 @@
       // Set the project
       window.PF.project = project;
 
+      // ── Propagate _dependenciesAvailable so the UI layer can surface a banner ──
+      // The flag is set by ms-graph.js (importFromDataverse / Planner sync) and
+      // must survive intact through the import pipeline.
+      const depsAvailable = project._dependenciesAvailable;
+      if (depsAvailable === false) {
+        console.warn(
+          '[ProjectIO] Imported project has _dependenciesAvailable=false.'
+          + ' Network/PERT diagram will show unlinked tasks.'
+          + ' Source: Dataverse unavailable or Project Operations not licensed.'
+        );
+      }
+
+      // Expose in a well-known state location for NetworkDiagram and other consumers.
+      // Both the flat property and the nested metadata path are written so callers
+      // can use whichever access pattern they already have.
+      if (window.PF.state) {
+        window.PF.state.dependenciesAvailable = depsAvailable !== false;
+      }
+      if (window.PF.project.metadata === undefined) window.PF.project.metadata = {};
+      window.PF.project.metadata.dependenciesAvailable = depsAvailable !== false;
+
       // Reindex tasks
       if (window.PF.reindexTasks) {
         window.PF.reindexTasks();

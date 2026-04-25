@@ -62,7 +62,11 @@ import { TeamsBridge } from './teams-bridge.js';
     let settings = {
         dateFormat: 'YYYY-MM-DD', hoursPerDay: 8, currency: '$',
         showWBS: true, showCost: true, showFloat: true, showColor: false,
-        showBaseline: true, showCritical: true, showLinks: true
+        showBaseline: true, showCritical: true, showLinks: true,
+        // D365-enriched columns
+        showPlannedHours: false, showActualHours: false,
+        showPlannedCost: false,  showActualCost: false,
+        showRemainingHours: false
     };
 
     let undoStack = [], redoStack = [];
@@ -981,13 +985,36 @@ import { TeamsBridge } from './teams-bridge.js';
 
     function handleExportCSV() {
         if (!project) return;
-        const h = ['ID','WBS','Task Name','Duration','Start','Finish','%Complete','Predecessors','Resources','Cost','Critical','Status','Notes'];
+        const h = [
+            'ID','WBS','Task Name','Duration (Days)','Start','Finish','%Complete',
+            'Predecessors','Resources',
+            'Planned Hours','Actual Hours','Remaining Hours',
+            'Planned Cost','Actual Cost','Cost Variance',
+            'Total Float','Free Float',
+            'Critical','Status','Notes'
+        ];
+        const fmtNum = v => (v != null && isFinite(v)) ? Number(v).toFixed(2) : '';
         const rows = project.tasks.map(t => [
-            t.id, t.wbs||'', `"${(t.name||'').replace(/"/g,'""')}"`, t.durationDays,
-            formatDate(t.start), formatDate(t.finish), t.percentComplete,
-            (t.predecessors||[]).map(p=>p.predecessorUID).join(';'),
-            `"${(t.resourceNames||[]).join(', ')}"`, t.cost||0,
-            t.critical?'Yes':'No', t.status||'', `"${(t.notes||'').replace(/"/g,'""')}"`
+            t.id,
+            t.wbs || '',
+            `"${(t.name||'').replace(/"/g,'""')}"`,
+            t.durationDays,
+            formatDate(t.start),
+            formatDate(t.finish),
+            t.percentComplete,
+            (t.predecessors||[]).map(p => { const tn = p.typeName||'FS'; return p.predecessorUID + (tn!=='FS'?tn:'') + (p.lag?'+'+p.lag:''); }).join(';'),
+            `"${(t.resourceNames||[]).join(', ')}"`,
+            fmtNum(t.plannedHours),
+            fmtNum(t.actualHours),
+            fmtNum(t.remainingHours),
+            fmtNum(t.plannedCost),
+            fmtNum(t.actualCost),
+            fmtNum(t.costVariance),
+            fmtNum(t.totalFloat),
+            fmtNum(t.freeFloat),
+            t.critical ? 'Yes' : 'No',
+            t.status || '',
+            `"${(t.notes||'').replace(/"/g,'""')}"`
         ]);
         const csv = [h.join(','), ...rows.map(r => r.join(','))].join('\n');
         downloadFile(csv, sanitize(project.name) + '.csv', 'text/csv');
@@ -1170,6 +1197,18 @@ import { TeamsBridge } from './teams-bridge.js';
             CPMEngine.compute(project.tasks, project.minutesPerDay || 480);
             CPMEngine.calculateVariance(project.tasks);
             CPMEngine.calculateStatus(project.tasks);
+
+            // ── Phase 1 fix: sync CPM deps flag back to project ──
+            // project._dependenciesAvailable set by the IMPORT SOURCE (Dataverse / ms-graph)
+            // takes precedence over the CPM heuristic.
+            // If the source explicitly said "no deps" (false), don't let CPM override it.
+            // If the source never set it (undefined), use the CPM heuristic.
+            if (project._dependenciesAvailable !== false) {
+                // Use CPM heuristic when source didn't say explicitly
+                if (typeof project.tasks._cpmDepsAvailable === 'boolean') {
+                    project._dependenciesAvailable = project.tasks._cpmDepsAvailable;
+                }
+            }
         } catch (err) {
             console.error('CPM Error:', err);
             showToast('error', 'CPM Error: ' + err.message);
@@ -1345,11 +1384,61 @@ import { TeamsBridge } from './teams-bridge.js';
                 autoSave(); renderTable();
             }, 'text');
 
-            // Cost
+            // Cost (Planned Cost)
             if (settings.showCost) {
                 addEditableCell(tr, task.cost > 0 ? task.cost.toFixed(0) : '', 'col-cost', (val) => {
-                    saveUndoState(); task.cost = parseFloat(val) || 0; renderAll(); autoSave();
+                    saveUndoState(); task.cost = parseFloat(val) || 0;
+                    task.plannedCost = task.cost;
+                    task.costVariance = (task.plannedCost||0) - (task.actualCost||0);
+                    renderAll(); autoSave();
                 }, 'cost');
+            }
+
+            // D365 Enriched Columns
+            // Planned Hours
+            if (settings.showPlannedHours) {
+                const ph = task.plannedHours != null ? task.plannedHours.toFixed(1) : '';
+                addEditableCell(tr, ph, 'col-planned-hours', (val) => {
+                    saveUndoState(); task.plannedHours = parseFloat(val) || 0;
+                    task.remainingHours = Math.max(0, task.plannedHours - (task.actualHours||0));
+                    renderAll(); autoSave();
+                }, 'cost');
+            }
+
+            // Actual Hours
+            if (settings.showActualHours) {
+                const ah = task.actualHours != null ? task.actualHours.toFixed(1) : '';
+                addEditableCell(tr, ah, 'col-actual-hours', (val) => {
+                    saveUndoState(); task.actualHours = parseFloat(val) || 0;
+                    task.remainingHours = Math.max(0, (task.plannedHours||0) - task.actualHours);
+                    renderAll(); autoSave();
+                }, 'cost');
+            }
+
+            // Remaining Hours
+            if (settings.showRemainingHours) {
+                const rh = task.remainingHours != null ? task.remainingHours.toFixed(1) : '';
+                addCell(tr, rh ? rh + 'h' : '—', 'col-remaining-hours');
+            }
+
+            // Planned Cost (separate display column)
+            if (settings.showPlannedCost) {
+                const pc = task.plannedCost != null && task.plannedCost > 0
+                    ? (settings.currency || '$') + task.plannedCost.toFixed(0)
+                    : '';
+                addCell(tr, pc, 'col-planned-cost');
+            }
+
+            // Actual Cost
+            if (settings.showActualCost) {
+                const ac = task.actualCost != null && task.actualCost > 0
+                    ? (settings.currency || '$') + task.actualCost.toFixed(0)
+                    : '';
+                const td = addCell(tr, ac, 'col-actual-cost');
+                // Color-code: red if actual > planned, green if under budget
+                if (task.actualCost > 0 && task.plannedCost > 0) {
+                    if (td) td.style.color = task.actualCost > task.plannedCost ? '#ef4444' : '#22c55e';
+                }
             }
 
             // Custom Fields — D.4
@@ -2303,6 +2392,12 @@ import { TeamsBridge } from './teams-bridge.js';
         $('settingShowBaseline').checked = settings.showBaseline;
         $('settingShowCritical').checked = settings.showCritical;
         $('settingShowLinks').checked = settings.showLinks;
+        // D365 enriched columns
+        if ($('settingShowPlannedHours'))  $('settingShowPlannedHours').checked  = settings.showPlannedHours;
+        if ($('settingShowActualHours'))   $('settingShowActualHours').checked   = settings.showActualHours;
+        if ($('settingShowRemainingHours'))$('settingShowRemainingHours').checked = settings.showRemainingHours;
+        if ($('settingShowPlannedCost'))   $('settingShowPlannedCost').checked   = settings.showPlannedCost;
+        if ($('settingShowActualCost'))    $('settingShowActualCost').checked    = settings.showActualCost;
         // Logo preview
         const savedLogo = localStorage.getItem('pf_report_logo');
         if (savedLogo) {
@@ -2338,6 +2433,12 @@ import { TeamsBridge } from './teams-bridge.js';
         settings.showBaseline = $('settingShowBaseline').checked;
         settings.showCritical = $('settingShowCritical').checked;
         settings.showLinks = $('settingShowLinks').checked;
+        // D365 enriched columns
+        settings.showPlannedHours  = !!($('settingShowPlannedHours')  && $('settingShowPlannedHours').checked);
+        settings.showActualHours   = !!($('settingShowActualHours')   && $('settingShowActualHours').checked);
+        settings.showRemainingHours= !!($('settingShowRemainingHours')&& $('settingShowRemainingHours').checked);
+        settings.showPlannedCost   = !!($('settingShowPlannedCost')   && $('settingShowPlannedCost').checked);
+        settings.showActualCost    = !!($('settingShowActualCost')    && $('settingShowActualCost').checked);
         settings.serverUrl = undefined; // MPP removed
         localStorage.setItem('pf_settings', JSON.stringify(settings));
         toggleModal('modalSettings', false);
@@ -2356,8 +2457,16 @@ import { TeamsBridge } from './teams-bridge.js';
 
     function applyColumnVisibility() {
         const toggle = (cls, show) => document.querySelectorAll('.' + cls).forEach(el => el.style.display = show ? '' : 'none');
-        toggle('col-wbs', settings.showWBS); toggle('col-cost', settings.showCost);
-        toggle('col-float', settings.showFloat); toggle('col-color', settings.showColor);
+        toggle('col-wbs',            settings.showWBS);
+        toggle('col-cost',           settings.showCost);
+        toggle('col-float',          settings.showFloat);
+        toggle('col-color',          settings.showColor);
+        // D365-enriched columns
+        toggle('col-planned-hours',  settings.showPlannedHours);
+        toggle('col-actual-hours',   settings.showActualHours);
+        toggle('col-remaining-hours',settings.showRemainingHours);
+        toggle('col-planned-cost',   settings.showPlannedCost);
+        toggle('col-actual-cost',    settings.showActualCost);
     }
 
     // ══════ AUTO-SAVE (Fixed race condition — TD-03) ══════
@@ -3205,7 +3314,17 @@ import { TeamsBridge } from './teams-bridge.js';
             }
 
             if (typeof NetworkDiagram !== 'undefined') {
-                NetworkDiagram.update(project.tasks);
+                // ── Phase 1 fix: pass _cpmDepsAvailable to the network diagram ──
+                // This flag is set by CPMEngine.compute() on the tasks array.
+                // Passing it here ensures the "no dependency data" banner is shown
+                // when the source (Dataverse / Planner Excel) had no predecessor links.
+                const depsAvail = typeof project.tasks._cpmDepsAvailable === 'boolean'
+                    ? project.tasks._cpmDepsAvailable
+                    : null;
+                // Also store on project so ProjectIO and reports can read it
+                if (depsAvail !== null) project._dependenciesAvailable = depsAvail;
+
+                NetworkDiagram.update(project.tasks, { dependenciesAvailable: depsAvail });
                 setTimeout(() => NetworkDiagram.fitToScreen(), 80);
             }
         });

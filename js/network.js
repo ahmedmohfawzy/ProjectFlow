@@ -58,6 +58,10 @@
     let _dpr = 1;
     let _touches = [], _touchDist = 0;
     let _tipEl = null;
+    // Whether the source project had dependency data available.
+    // false  → show "no links" banner over the diagram.
+    // null   → unknown / not yet set (no banner shown).
+    let _dependenciesAvailable = null;
 
     // Minimap
     const MM = { w: 148, h: 88, pad: 8 };
@@ -164,10 +168,27 @@
     /**
      * Main entry point — receives the FULL task list (incl. summaries).
      * Summaries are stored for predecessor resolution but excluded from layout.
+     *
+     * @param {Task[]} taskList - Full task list (may include summaries)
+     * @param {object} [options]
+     * @param {boolean|null} [options.dependenciesAvailable]
+     *   Pass `false` when the import source could not provide dependency data
+     *   (e.g. Dataverse unavailable).  The diagram will show an explanatory
+     *   banner so users understand why all tasks appear unlinked.
+     *   Pass `true` or omit to show the diagram normally.
      */
-    function update(taskList) {
+    function update(taskList, options = {}) {
         // Store the raw full list (including summaries) for predecessor resolution
         _allTasksRaw = taskList || [];
+
+        // Update flag — prefer explicit option, fallback to array property set by CPM
+        if (typeof options.dependenciesAvailable === 'boolean') {
+            _dependenciesAvailable = options.dependenciesAvailable;
+        } else if (typeof taskList._cpmDepsAvailable === 'boolean') {
+            _dependenciesAvailable = taskList._cpmDepsAvailable;
+        } else {
+            _dependenciesAvailable = null; // unknown — no banner
+        }
 
         // Visible set = non-summary + visible
         _allTasks = _allTasksRaw.filter(t => !t.summary && t.isVisible !== false);
@@ -499,6 +520,13 @@
         if (_nodes.length > 0) _drawMinimap(cw, ch);
         else _drawEmpty(cw, ch);
         _drawLegend(cw, ch);
+
+        // "No dependency data" banner — shown when the import source could not
+        // provide predecessor links (e.g. Dataverse unavailable, Scenario B).
+        // Only shown when there ARE nodes so it doesn't compete with _drawEmpty.
+        if (_dependenciesAvailable === false && _nodes.length > 0) {
+            _drawNoDepsBanner(cw);
+        }
     }
 
     // ── Edge ──────────────────────────────────────────────────
@@ -723,6 +751,35 @@
         _ctx.fillText('No tasks available for Network view', cw/2, ch/2-16);
         _ctx.font='11px Inter,sans-serif';
         _ctx.fillText('Import a project with tasks to see the Network / PERT diagram', cw/2, ch/2+10);
+    }
+
+    /**
+     * Draw a "no dependency data" warning banner anchored to the top of the canvas.
+     * Called by _draw() when _dependenciesAvailable === false and nodes are present.
+     *
+     * The banner is drawn AFTER the pan/scale transform is restored so it stays
+     * in a fixed position regardless of zoom level.
+     */
+    function _drawNoDepsBanner(cw) {
+        const bH = 38, pad = 14;
+        // Background pill
+        _ctx.save();
+        _ctx.fillStyle = 'rgba(245,158,11,0.13)';
+        _ctx.strokeStyle = 'rgba(245,158,11,0.55)';
+        _ctx.lineWidth = 1;
+        _rrp(pad, pad, cw - pad * 2, bH, 8); _ctx.fill();
+        _rrp(pad, pad, cw - pad * 2, bH, 8); _ctx.stroke();
+
+        // Icon + text
+        _ctx.fillStyle = '#f59e0b';
+        _ctx.font = `600 11.5px Inter,sans-serif`;
+        _ctx.textAlign = 'center';
+        _ctx.textBaseline = 'middle';
+        _ctx.fillText(
+            '⚠  الشبكة تُظهر مهام معزولة — بيانات الاعتماديات غير متاحة من المصدر (Dataverse / Project Ops)',
+            cw / 2, pad + bH / 2
+        );
+        _ctx.restore();
     }
 
     // ── PNG Export (tight-crop, up to 4K) ────────────────────
