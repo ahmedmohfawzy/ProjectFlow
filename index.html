@@ -42,7 +42,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="ProjectFlow">
-  <script type="module" crossorigin src="/ProjectFlow/assets/main-DKfmulVd.js"></script>
+  <script type="module" crossorigin src="/ProjectFlow/assets/main-BO4TH27r.js"></script>
   <link rel="modulepreload" crossorigin href="/ProjectFlow/assets/modulepreload-polyfill-wMinxHhO.js">
   <link rel="stylesheet" crossorigin href="/ProjectFlow/assets/main-Bw_rbSpr.css">
 </head>
@@ -477,6 +477,11 @@
                                     <th class="col-predecessors">Pred.</th>
                                     <th class="col-resources">Resources</th>
                                     <th class="col-cost">Cost</th>
+                                    <th class="col-planned-hours" title="Planned Hours (D365)" style="display:none">Pl.Hrs</th>
+                                    <th class="col-actual-hours" title="Actual Hours (D365)" style="display:none">Ac.Hrs</th>
+                                    <th class="col-remaining-hours" title="Remaining Hours (D365)" style="display:none">Rem.Hrs</th>
+                                    <th class="col-planned-cost" title="Planned Cost from D365" style="display:none">Pl.Cost</th>
+                                    <th class="col-actual-cost" title="Actual Cost from D365" style="display:none">Ac.Cost</th>
                                     <th class="col-color" title="Color">🎨</th>
                                 </tr>
                             </thead>
@@ -1131,6 +1136,14 @@
                     <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowCost" checked><span class="toggle-switch"></span>Cost</label></div>
                     <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowFloat" checked><span class="toggle-switch"></span>Float</label></div>
                     <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowColor"><span class="toggle-switch"></span>Color</label></div>
+                </div>
+                <h4 style="margin-top:8px;color:var(--accent-primary);font-size:0.78rem">⚡ D365 / Effort &amp; Cost Columns</h4>
+                <div class="form-row" style="flex-wrap:wrap;gap:4px">
+                    <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowPlannedHours"><span class="toggle-switch"></span>Planned Hours</label></div>
+                    <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowActualHours"><span class="toggle-switch"></span>Actual Hours</label></div>
+                    <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowRemainingHours"><span class="toggle-switch"></span>Remaining Hours</label></div>
+                    <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowPlannedCost"><span class="toggle-switch"></span>Planned Cost</label></div>
+                    <div class="form-group"><label class="toggle-label"><input type="checkbox" id="settingShowActualCost"><span class="toggle-switch"></span>Actual Cost</label></div>
                 </div>
                 <h4 style="margin-top:8px;color:var(--text-secondary)">Gantt Options</h4>
                 <div class="form-row">
