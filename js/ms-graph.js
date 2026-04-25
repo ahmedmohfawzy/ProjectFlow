@@ -1070,22 +1070,19 @@ function _getMsal() {
         const dvAssignments = assignResp.ok ? ((await assignResp.json()).value || []) : [];
         const dvTeam = teamResp.ok ? ((await teamResp.json()).value || []) : [];
 
-        // ── Fetch task dependencies (no-filter, client-side match) ──
-        // Dataverse rejects $filter on lookup fields (_msdyn_successortask_value) in
-        // Planner Premium tenants → HTTP 400 on every filtered request.
-        // Solution: fetch all deps (up to 500) without any $filter, then keep only
-        // records whose successor GUID is in THIS project's task list.
+        // ── Fetch task dependencies (diagnostic-first, no assumed field names) ──
+        // Microsoft docs show field names that differ between tenants/versions:
+        //   C# SDK:         msdyn_predecessortask / msdyn_successortask (no 'id' suffix)
+        //   Some docs:      msdyn_predecessortaskid / msdyn_successortaskid
+        // Strategy: probe with 1 record (no $select) to discover real field names,
+        // then fetch all with the correct fields.
         const dvDepsAll = await (async () => {
             const taskGuidSet = new Set(
                 dvTasks.map(t => (t.msdyn_projecttaskid || '').toLowerCase()).filter(Boolean)
             );
             if (!taskGuidSet.size) return [];
 
-            const depUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies`
-                + `?$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype`
-                + `&$top=500`;
-
-            // Use minimal headers (no Prefer annotation) for max compatibility
+            const baseUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies`;
             const minHeaders = {
                 Authorization: dvHeaders.Authorization,
                 'OData-MaxVersion': '4.0',
@@ -1093,20 +1090,60 @@ function _getMsal() {
                 Accept: 'application/json',
             };
 
+            // Step 1: probe — fetch 1 record with no $select to discover field names
+            let predField = '_msdyn_predecessortask_value';   // default assumption
+            let succField = '_msdyn_successortask_value';     // default assumption
+            let linkField = 'msdyn_linktype';
+
             try {
+                const probeResp = await fetch(`${baseUrl}?$top=1`, { method: 'GET', headers: minHeaders });
+                if (!probeResp.ok) {
+                    console.warn(`[Dataverse] Dependency table probe failed (HTTP ${probeResp.status}) — entity may not be accessible in this tenant`);
+                    return [];
+                }
+                const probeData = await probeResp.json();
+                const sample = (probeData.value || [])[0];
+                if (sample) {
+                    // Log real field names for debugging
+                    const keys = Object.keys(sample).filter(k => !k.startsWith('@'));
+                    console.log('[Dataverse] Dependency entity fields:', keys.join(', '));
+
+                    // Auto-detect predecessor/successor field names
+                    if (keys.includes('_msdyn_predecessortaskid_value')) predField = '_msdyn_predecessortaskid_value';
+                    if (keys.includes('_msdyn_predecessortask_value'))   predField = '_msdyn_predecessortask_value';
+                    if (keys.includes('_msdyn_successortaskid_value'))   succField = '_msdyn_successortaskid_value';
+                    if (keys.includes('_msdyn_successortask_value'))     succField = '_msdyn_successortask_value';
+                    console.log(`[Dataverse] Using dep fields: pred=${predField}, succ=${succField}`);
+                } else {
+                    console.log('[Dataverse] Dependency table accessible but empty — no predecessors defined');
+                    return [];
+                }
+            } catch (e) {
+                console.warn('[Dataverse] Dependency probe error:', e.message);
+                return [];
+            }
+
+            // Step 2: fetch all deps with correct field names, filter client-side
+            try {
+                const depUrl = `${baseUrl}?$select=msdyn_projecttaskdependencyid,${predField},${succField},${linkField}&$top=500`;
                 const resp = await fetch(depUrl, { method: 'GET', headers: minHeaders });
                 if (!resp.ok) {
-                    console.warn(`[Dataverse] Dependency table not accessible (HTTP ${resp.status}) — predecessors will be empty`);
+                    console.warn(`[Dataverse] Dependency fetch failed (HTTP ${resp.status})`);
                     return [];
                 }
                 const data = await resp.json();
                 const allDeps = data.value || [];
-                // Filter client-side: keep only deps belonging to this project's tasks
                 const projectDeps = allDeps.filter(d =>
-                    taskGuidSet.has((d._msdyn_successortask_value || '').toLowerCase())
+                    taskGuidSet.has((d[succField] || '').toLowerCase())
                 );
                 console.log(`[Dataverse] Dependency fetch: ${allDeps.length} org-wide → ${projectDeps.length} for this project`);
-                return projectDeps;
+                // Normalize to consistent field names for wiring code downstream
+                return projectDeps.map(d => ({
+                    msdyn_projecttaskdependencyid: d.msdyn_projecttaskdependencyid,
+                    _msdyn_predecessortask_value:  d[predField] || '',
+                    _msdyn_successortask_value:    d[succField] || '',
+                    msdyn_linktype:                d[linkField],
+                }));
             } catch (e) {
                 console.warn('[Dataverse] Dependency fetch error:', e.message);
                 return [];
