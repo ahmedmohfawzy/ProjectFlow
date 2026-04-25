@@ -644,7 +644,7 @@ function _getMsal() {
             // 4. Fetch task dependencies (predecessors/successors for Network/PERT)
             const depUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
-                + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype,msdyn_lagduration`
+                + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype`
                 + `&$top=500`;
 
             // 5. Fetch project entity for manager + scheduled dates
@@ -753,7 +753,7 @@ function _getMsal() {
                         const taskFilter = taskIds.map(id => `_msdyn_successortask_value eq '${id}'`).join(' or ');
                         const depFallbackUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies`
                             + `?$filter=${taskFilter}`
-                            + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype,msdyn_lagduration`
+                            + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype`
                             + `&$top=500`;
                         const depFallback = await fetch(depFallbackUrl, { method: 'GET', headers: dvHeaders }).catch(() => null);
                         if (depFallback && depFallback.ok) {
@@ -783,7 +783,7 @@ function _getMsal() {
                     dvMap.get(successorId).dvPredecessors.push({
                         dvTaskId:   predecessorId,
                         linkType:   LINK_TYPES[dep.msdyn_linktype] || 'FS',
-                        lagMinutes: dep.msdyn_lagduration || 0, // in minutes from Dataverse
+                        lagMinutes: 0, // msdyn_lagduration not fetched (Planner Premium doesn't support it)
                     });
                     depStored++;
                     // Note: predecessorId is stored but not validated against dvMap here.
@@ -1067,7 +1067,7 @@ function _getMsal() {
                 { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
-                + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype,msdyn_lagduration`
+                + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype`
                 + `&$top=500`,
                 { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projects`
@@ -1317,10 +1317,8 @@ function _getMsal() {
                 const task = project.tasks.find(t => t.uid === successorUid);
                 if (task) {
                     const linkName = LINK_TYPES[dep.msdyn_linktype] || 'FS';
-                    // msdyn_lagduration is stored in minutes in Dataverse → convert to working days
-                    const lagDays = dep.msdyn_lagduration
-                        ? Math.round(dep.msdyn_lagduration / minutesPerDay)
-                        : 0;
+                    // lag not available in Planner Premium (msdyn_lagduration requires Project Operations)
+                    const lagDays = 0;
                     task.predecessors.push({
                         predecessorUID: predecessorUid,
                         type: TYPE_CODES_DV[linkName] ?? 1,
@@ -1735,6 +1733,7 @@ function _getMsal() {
         // ── Resolve Dataverse predecessors into ProjectFlow predecessor UIDs ──
         if (hasHierarchy) {
             // Build DV task ID → ProjectFlow task UID mapping
+            // (needed to resolve pred.dvTaskId → UID later)
             const dvIdToUid = new Map();
             project.tasks.forEach(t => {
                 if (t._dvTaskId) dvIdToUid.set(t._dvTaskId, t.uid);
@@ -1742,24 +1741,26 @@ function _getMsal() {
 
             console.log(`[MSGraph] Predecessor resolution: ${dvIdToUid.size} tasks with DV IDs`);
 
-            // Count how many tasks have dvPredecessors from Dataverse
-            // NOTE: dataverseHierarchy is keyed by Dataverse task GUIDs (lowercase), not Planner IDs
-            //       so we must use t._dvTaskId (the Dataverse GUID) — NOT t._plannerId
+            // ── KEY FIX: dataverseHierarchy is keyed by PLANNER task ID ──
+            // (result.set(plannerTaskId, info) in _fetchDataverseHierarchy)
+            // Previous code used t._dvTaskId as the lookup key → always undefined.
+            // Must use t._plannerId to match the Map structure.
             let dvPredCount = 0;
             project.tasks.forEach(t => {
-                if (!t._dvTaskId) return;
-                const dvInfo = dataverseHierarchy.get(t._dvTaskId);
+                if (!t._plannerId) return;
+                const dvInfo = dataverseHierarchy.get(t._plannerId); // ← Planner ID, NOT _dvTaskId
                 if (dvInfo?.dvPredecessors?.length > 0) dvPredCount += dvInfo.dvPredecessors.length;
             });
             console.log(`[MSGraph] Dataverse dvPredecessors found: ${dvPredCount}`);
 
-            // For each task with Dataverse info, resolve its predecessor references
+            // For each task, look up its Dataverse info by Planner task ID
             project.tasks.forEach(t => {
-                if (!t._dvTaskId) return;
-                const dvInfo = dataverseHierarchy.get(t._dvTaskId);  // keyed by DV GUID, not Planner ID
+                if (!t._plannerId) return;
+                const dvInfo = dataverseHierarchy.get(t._plannerId); // ← Planner ID, NOT _dvTaskId
                 if (!dvInfo || !dvInfo.dvPredecessors || dvInfo.dvPredecessors.length === 0) return;
 
                 dvInfo.dvPredecessors.forEach(pred => {
+                    // pred.dvTaskId is a Dataverse GUID → resolve to ProjectFlow UID
                     const predUid = dvIdToUid.get(pred.dvTaskId);
                     if (predUid) {
                         // CPM type codes: FF=0, FS=1, SF=2, SS=3
@@ -1773,6 +1774,9 @@ function _getMsal() {
                             typeName: pred.linkType || 'FS',
                             lag: lagDays,
                         });
+                    } else {
+                        console.warn(`[MSGraph] Predecessor GUID not found in task list: ${pred.dvTaskId}`,
+                            '(cross-project dependency or task was deleted)');
                     }
                 });
             });
