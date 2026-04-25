@@ -6,157 +6,250 @@
  */
 /**
  * ═══════════════════════════════════════════════════════
- * ProjectFlow — Critical Path Method (CPM) Engine
- * + Baseline tracking + Progress indicators
+ * ProjectFlow — Critical Path Method (CPM) Engine v2
+ *
+ * Design principles:
+ *  1. Summary predecessors are resolved to their last leaf child
+ *     BEFORE the forward/backward pass — so the network math is
+ *     always leaf-to-leaf and never encounters _ef=0 from a
+ *     skipped summary task.
+ *  2. "Isolated" treatment (LF=EF) is only applied when the
+ *     project actually has connected leaf tasks.  A flat task
+ *     list with no dependencies falls back to the classic
+ *     "all tasks share projectEnd" model so only the latest
+ *     task(s) are critical.
+ *  3. Calendar start dates act as a minimum floor for ES —
+ *     no task can start before its scheduled date even if the
+ *     network would allow it (ASAP with date constraints).
  * ═══════════════════════════════════════════════════════
  */
 
 
-    /**
-     * Compute Critical Path for a list of tasks
-     * Uses Forward Pass + Backward Pass
-     * @param {Array} tasks — project tasks with predecessors
-     * @param {number} minutesPerDay — working minutes per day (default 480)
-     * @returns {Array} tasks with ES, EF, LS, LF, totalFloat, freeFloat, critical
+    /* ─── helpers ─────────────────────────────────────────── */
+
+    function _daysBetween(d1, d2) {
+        const t1 = new Date(d1); t1.setHours(0,0,0,0);
+        const t2 = new Date(d2); t2.setHours(0,0,0,0);
+        if (typeof WorkCalendar !== 'undefined' && WorkCalendar.getWorkingDays)
+            return WorkCalendar.getWorkingDays(t1, t2);
+        return Math.round((t2 - t1) / 86400000);
+    }
+
+    function _minDate(tasks) {
+        let min = Infinity;
+        tasks.forEach(t => { const d = new Date(t.start).getTime(); if (d < min) min = d; });
+        return new Date(min);
+    }
+
+    function _typeName(type) {
+        switch (type) { case 0: return 'FF'; case 1: return 'FS'; case 2: return 'SF'; case 3: return 'SS'; default: return 'FS'; }
+    }
+
+    /* ─── Pre-process: resolve summary predecessors ─────────
+     *
+     * Summary tasks are skipped in the forward/backward pass
+     * (_ef stays 0).  Any task whose predecessor IS a summary
+     * task therefore gets depEnd = 0 and floats freely.
+     *
+     * Fix: for each summary task build a "last leaf descendant"
+     * pointer, then rewrite all predecessor lists so they point
+     * to that leaf instead of the summary.
+     *
+     * The original task.predecessors array is NOT mutated;
+     * a new task._cpmPreds array is written and used by the
+     * forward/backward pass.
      */
+    function _buildCpmPreds(tasks, taskMap) {
+        // Step 1 — for every summary task find its last non-summary descendant
+        const summaryLastLeaf = new Map(); // summaryUid → leafUid
+
+        tasks.forEach((t, idx) => {
+            if (!t.summary) return;
+            const level = t.outlineLevel || 1;
+            let lastLeaf = null;
+            for (let j = idx + 1; j < tasks.length; j++) {
+                if ((tasks[j].outlineLevel || 1) <= level) break;
+                if (!tasks[j].summary) lastLeaf = tasks[j];
+            }
+            if (lastLeaf) summaryLastLeaf.set(t.uid, lastLeaf.uid);
+        });
+
+        // Step 2 — build _cpmPreds for every task
+        tasks.forEach(t => {
+            if (!t.predecessors || t.predecessors.length === 0) {
+                t._cpmPreds = [];
+                return;
+            }
+            const resolved = [];
+            const seen = new Set();
+
+            t.predecessors.forEach(pred => {
+                const predTask = taskMap.get(pred.predecessorUID);
+                if (!predTask) return;
+
+                let targetUid = pred.predecessorUID;
+                if (predTask.summary) {
+                    // Replace summary with its last leaf child
+                    const leafUid = summaryLastLeaf.get(pred.predecessorUID);
+                    if (!leafUid) return; // no leaf found — skip
+                    targetUid = leafUid;
+                }
+
+                if (targetUid === t.uid) return; // self-loop guard
+                if (seen.has(targetUid)) return;  // deduplicate
+                seen.add(targetUid);
+
+                resolved.push({ ...pred, predecessorUID: targetUid });
+            });
+
+            t._cpmPreds = resolved;
+        });
+    }
+
+    /* ─── Main CPM computation ───────────────────────────── */
+
     function compute(tasks, minutesPerDay = 480) {
         if (!tasks || tasks.length === 0) return tasks;
 
-        // Idempotency: computed props are cleared at the start of the pass
-        
-        // Build lookup
+        /* ── 0. Initialise CPM fields ── */
         const taskMap = new Map();
         tasks.forEach(t => {
             t._es = 0; t._ef = 0; t._ls = Infinity; t._lf = Infinity;
-            t._totalFloat = 0; t._freeFloat = 0; t._critical = false;
-            t._isolated = false; // will be set true for tasks with no preds AND no succs
+            t._totalFloat = 0; t._freeFloat = 0;
+            t._critical = false; t._isolated = false;
+            t.totalFloat = 0; t.freeFloat = 0; t.critical = false;
             taskMap.set(t.uid, t);
         });
 
-        // Build successors map
-        const successors = new Map();
+        /* ── 1. Resolve summary predecessors ── */
+        _buildCpmPreds(tasks, taskMap);
+
+        /* ── 2. Build successors map (from resolved preds) ── */
+        const successors = new Map(); // uid → [{ task, typeName, lag }]
         tasks.forEach(t => {
-            if (t.predecessors) {
-                t.predecessors.forEach(pred => {
-                    if (!successors.has(pred.predecessorUID)) {
-                        successors.set(pred.predecessorUID, []);
-                    }
-                    successors.get(pred.predecessorUID).push({
-                        task: t,
-                        type: pred.type ?? 1, // FS default (FF=0, FS=1, SF=2, SS=3)
-                        typeName: pred.typeName || 'FS',
-                        lag: pred.lag || 0
-                    });
+            t._cpmPreds.forEach(pred => {
+                if (!successors.has(pred.predecessorUID))
+                    successors.set(pred.predecessorUID, []);
+                successors.get(pred.predecessorUID).push({
+                    task: t,
+                    typeName: pred.typeName || _typeName(pred.type ?? 1),
+                    lag: pred.lag || 0,
                 });
-            }
+            });
         });
 
-        // ─── Forward Pass (compute ES, EF) ───
-        // Topological sort with cycle detection
+        /* ── 3. Topological sort with cycle detection ── */
         const UNVISITED = 0, PROCESSING = 1, DONE = 2;
         const visitState = new Map();
         const sorted = [];
-        const cycleWarnings = [];
-
         tasks.forEach(t => visitState.set(t.uid, UNVISITED));
-        
+
         function topoSort(task) {
             const state = visitState.get(task.uid);
             if (state === DONE) return;
-            if (state === PROCESSING) {
-                // Cycle detected — throw to prevent silent miscalculations
-                throw new Error(`Cycle detected at task uid=${task.uid} (${task.name}). Network contains a circular dependency.`);
-            }
+            if (state === PROCESSING)
+                throw new Error(`Cycle at uid=${task.uid} (${task.name})`);
             visitState.set(task.uid, PROCESSING);
-            if (task.predecessors) {
-                task.predecessors.forEach(pred => {
-                    const predTask = taskMap.get(pred.predecessorUID);
-                    if (predTask) topoSort(predTask);
-                });
-            }
+            task._cpmPreds.forEach(pred => {
+                const pt = taskMap.get(pred.predecessorUID);
+                if (pt) topoSort(pt);
+            });
             visitState.set(task.uid, DONE);
             sorted.push(task);
         }
+        tasks.forEach(t => { try { topoSort(t); } catch(e) { console.warn('[CPM]', e.message); } });
 
-        tasks.forEach(t => topoSort(t));
-
-        // Forward pass
-        const projectStartDate = getMinDate(tasks);
+        /* ── 4. Forward Pass ── */
+        const projectStart = _minDate(tasks);
 
         sorted.forEach(task => {
-            if (task.summary) return; // Skip summary tasks
+            if (task.summary) return;
 
-            // Calendar-based ES: how many days from project start to this task's planned start
-            // Applied to ALL tasks as a minimum floor — prevents mixing two ES coordinate systems
-            // (a late standalone task at day 380 would otherwise become the only critical task)
-            const calES = daysBetween(projectStartDate, new Date(task.start));
+            // Calendar constraint: task cannot start before its scheduled date
+            const calES = _daysBetween(projectStart, new Date(task.start));
 
-            let es = calES; // start with calendar constraint as the floor
-            if (task.predecessors && task.predecessors.length > 0) {
-                task.predecessors.forEach(pred => {
-                    const predTask = taskMap.get(pred.predecessorUID);
-                    if (!predTask) return;
+            let es = calES; // calendar is the minimum floor
 
-                    let depEnd = 0;
-                    const type = pred.typeName || getTypeName(pred.type);
-                    const lag = pred.lag || 0;
+            task._cpmPreds.forEach(pred => {
+                const pt = taskMap.get(pred.predecessorUID);
+                if (!pt || pt.summary) return;
 
-                    switch (type) {
-                        case 'FS': depEnd = predTask._ef + lag; break;
-                        case 'SS': depEnd = predTask._es + lag; break;
-                        case 'FF': depEnd = predTask._ef + lag - task.durationDays; break;
-                        case 'SF': depEnd = predTask._es + lag - task.durationDays; break;
-                        default:   depEnd = predTask._ef + lag;
-                    }
-                    es = Math.max(es, depEnd);
-                });
-            }
+                const type = pred.typeName || _typeName(pred.type ?? 1);
+                const lag  = pred.lag || 0;
+                let depEnd = 0;
+                switch (type) {
+                    case 'FS': depEnd = pt._ef + lag; break;
+                    case 'SS': depEnd = pt._es + lag; break;
+                    case 'FF': depEnd = pt._ef + lag - (task.durationDays || 0); break;
+                    case 'SF': depEnd = pt._es + lag - (task.durationDays || 0); break;
+                    default:   depEnd = pt._ef + lag;
+                }
+                es = Math.max(es, depEnd);
+            });
 
             task._es = Math.max(0, es);
-            task._ef = task._es + Math.max(0, task.durationDays || 0); // Guard negative duration (P0 #14)
+            task._ef = task._es + Math.max(0, task.durationDays || 0);
         });
 
-        // ─── Backward Pass (compute LS, LF) ───
+        /* ── 5. Determine project end ──
+         *
+         * "Connected" = has at least one real (non-summary) predecessor
+         * or at least one real (non-summary) successor.
+         *
+         * If NO tasks are connected (pure flat list), we skip isolated
+         * detection and let all tasks share the same projectEnd — only
+         * the latest-ending tasks will have float ≈ 0 (correct).
+         */
+        const anyConnected = tasks.some(t =>
+            !t.summary && (
+                t._cpmPreds.length > 0 ||
+                (successors.get(t.uid) || []).some(s => !s.task.summary)
+            )
+        );
 
-        // Identify isolated tasks: no predecessors AND no successors
-        // An isolated task far in the future must NOT define projectEnd for the whole network —
-        // otherwise every connected chain gets huge float and zero critical tasks.
         const isolatedUids = new Set();
-        tasks.forEach(t => {
-            if (t.summary) return;
-            const hasPreds = t.predecessors && t.predecessors.length > 0;
-            const hasSuccs  = successors.get(t.uid) && successors.get(t.uid).length > 0;
-            if (!hasPreds && !hasSuccs) { isolatedUids.add(t.uid); t._isolated = true; }
-        });
+        if (anyConnected) {
+            tasks.forEach(t => {
+                if (t.summary) return;
+                const hasPreds = t._cpmPreds.length > 0;
+                const hasSuccs = (successors.get(t.uid) || []).some(s => !s.task.summary);
+                if (!hasPreds && !hasSuccs) {
+                    isolatedUids.add(t.uid);
+                    t._isolated = true;
+                }
+            });
+        }
 
-        // projectEnd = max EF of CONNECTED tasks only (at least one pred or succ)
-        // Falls back to overall max EF if no connected tasks exist
-        const connectedEFs = tasks.filter(t => !t.summary && !isolatedUids.has(t.uid)).map(t => t._ef);
-        const allEFs       = tasks.filter(t => !t.summary).map(t => t._ef);
-        const projectEnd   = (connectedEFs.length > 0 ? connectedEFs : allEFs)
-                                .filter(v => isFinite(v))
-                                .reduce((a, b) => Math.max(a, b), 0);
+        // projectEnd = max EF of connected (non-isolated) leaf tasks
+        const connectedEFs = tasks
+            .filter(t => !t.summary && !isolatedUids.has(t.uid))
+            .map(t => t._ef).filter(isFinite);
+        const allLeafEFs = tasks
+            .filter(t => !t.summary)
+            .map(t => t._ef).filter(isFinite);
+        const projectEnd = Math.max(...(connectedEFs.length ? connectedEFs : allLeafEFs), 0);
 
-        // Reverse order
+        /* ── 6. Backward Pass ── */
         for (let i = sorted.length - 1; i >= 0; i--) {
             const task = sorted[i];
             if (task.summary) continue;
 
-            const succs = successors.get(task.uid);
-            if (!succs || succs.length === 0) {
-                // Isolated task: LF = its own EF → float = 0 (trivially on its own critical path)
-                // Terminal connected task: LF = network projectEnd
-                task._lf = isolatedUids.has(task.uid) ? task._ef : projectEnd;
-                task._ls = task._lf - Math.max(0, task.durationDays || 0); // Guard negative duration
+            const realSuccs = (successors.get(task.uid) || [])
+                .filter(s => !s.task.summary);
+
+            if (isolatedUids.has(task.uid)) {
+                // Isolated task: its own mini critical path
+                task._lf = task._ef;
+            } else if (realSuccs.length === 0) {
+                // Terminal connected task
+                task._lf = projectEnd;
             } else {
                 let lf = Infinity;
-                succs.forEach(succ => {
-                    // Validate successor values rigorously before use
+                realSuccs.forEach(succ => {
                     if (!isFinite(succ.task._ls) || !isFinite(succ.task._lf)) return;
-                    const type = succ.typeName || getTypeName(succ.type);
-                    const lag = succ.lag || 0;
-                    const dur = task.durationDays || 0;
-
+                    const type = succ.typeName || 'FS';
+                    const lag  = succ.lag || 0;
+                    const dur  = task.durationDays || 0;
                     let val;
                     switch (type) {
                         case 'FS': val = succ.task._ls - lag; break;
@@ -168,216 +261,162 @@
                     if (isFinite(val)) lf = Math.min(lf, val);
                 });
                 task._lf = isFinite(lf) ? lf : projectEnd;
-                task._ls = task._lf - Math.max(0, task.durationDays || 0); // Guard negative duration
             }
+
+            task._ls = task._lf - Math.max(0, task.durationDays || 0);
         }
 
-        // Calc Float
+        /* ── 7. Float & Criticality ── */
         tasks.forEach(task => {
             if (task.summary) return;
             task._totalFloat = Math.max(0, task._ls - task._es);
-            task.totalFloat = task._totalFloat;
-            // Use epsilon comparison to avoid floating-point false negatives
-            task._critical = task._totalFloat < 0.001;
-            task.critical = task._critical;
+            task.totalFloat  = task._totalFloat;
+            task._critical   = task._totalFloat < 0.001;
+            task.critical    = task._critical;
         });
 
-        // Free Float with Dependency Type Formula mapping
+        /* ── 8. Free Float ── */
         tasks.forEach(task => {
             if (task.summary) return;
-            const succs = successors.get(task.uid);
-            if (!succs || succs.length === 0) {
+            const realSuccs = (successors.get(task.uid) || []).filter(s => !s.task.summary);
+            if (!realSuccs.length) {
                 task._freeFloat = task._totalFloat;
             } else {
-                let minSuccES = Infinity;
-                succs.forEach(s => {
-                    const type = s.typeName || getTypeName(s.type);
-                    const lag = s.lag || 0;
-                    let drivenFinish = Infinity;
+                let minDriven = Infinity;
+                realSuccs.forEach(s => {
+                    const type = s.typeName || 'FS';
+                    const lag  = s.lag || 0;
+                    let driven;
                     switch (type) {
-                        case 'FS': drivenFinish = s.task._es - lag; break;
-                        case 'SS': drivenFinish = s.task._es - lag + (task.durationDays||0); break;
-                        case 'FF': drivenFinish = s.task._ef - lag; break;
-                        case 'SF': drivenFinish = s.task._ef - lag + (task.durationDays||0); break;
-                        default:   drivenFinish = s.task._es - lag;
+                        case 'FS': driven = s.task._es - lag; break;
+                        case 'SS': driven = s.task._es - lag + (task.durationDays || 0); break;
+                        case 'FF': driven = s.task._ef - lag; break;
+                        case 'SF': driven = s.task._ef - lag + (task.durationDays || 0); break;
+                        default:   driven = s.task._es - lag;
                     }
-                    minSuccES = Math.min(minSuccES, drivenFinish);
+                    minDriven = Math.min(minDriven, driven);
                 });
-                task._freeFloat = Math.max(0, minSuccES - task._ef);
+                task._freeFloat = Math.max(0, minDriven - task._ef);
             }
             task.freeFloat = task._freeFloat;
         });
 
-        // Mark summary tasks as critical if any child is
-        tasks.forEach(task => {
-            if (!task.summary) return;
+        /* ── 9. Propagate results to summary tasks ── */
+        // Walk bottom-up so nested summaries propagate correctly
+        for (let i = tasks.length - 1; i >= 0; i--) {
+            const task = tasks[i];
+            if (!task.summary) continue;
+
             const level = task.outlineLevel || 1;
-            const idx = tasks.indexOf(task);
-            for (let j = idx + 1; j < tasks.length; j++) {
+            let minES = Infinity, maxEF = -Infinity, isCrit = false;
+
+            for (let j = i + 1; j < tasks.length; j++) {
                 if ((tasks[j].outlineLevel || 1) <= level) break;
-                if (tasks[j]._critical) {
-                    task.critical = true;
-                    task._critical = true;
-                    break;
-                }
+                if (tasks[j].summary) continue; // only leaf children
+                if (isFinite(tasks[j]._es)) minES = Math.min(minES, tasks[j]._es);
+                if (isFinite(tasks[j]._ef)) maxEF = Math.max(maxEF, tasks[j]._ef);
+                if (tasks[j]._critical) isCrit = true;
             }
-        });
+
+            task._es = isFinite(minES) ? minES : 0;
+            task._ef = isFinite(maxEF) ? maxEF : 0;
+            task._ls = task._es;
+            task._lf = task._ef;
+            task._totalFloat = 0; task.totalFloat = 0;
+            task._freeFloat  = 0; task.freeFloat  = 0;
+            task._critical   = isCrit; task.critical = isCrit;
+        }
+
+        /* ── 10. Clean up temp field ── */
+        tasks.forEach(t => { delete t._cpmPreds; });
 
         return tasks;
     }
 
-    // ─── Baseline ───
+    /* ─── Baseline ─────────────────────────────────────── */
 
-    /**
-     * Set baseline: save current dates as baseline
-     */
     function setBaseline(tasks) {
         tasks.forEach(t => {
-            t.baselineStart = new Date(t.start);
-            t.baselineFinish = new Date(t.finish);
+            t.baselineStart    = new Date(t.start);
+            t.baselineFinish   = new Date(t.finish);
             t.baselineDuration = t.durationDays;
         });
         return tasks;
     }
 
-    /**
-     * Calculate schedule variance for each task
-     */
     function calculateVariance(tasks) {
         tasks.forEach(t => {
-            if (t.baselineStart && t.baselineFinish) {
-                const bStart = new Date(t.baselineStart);
-                const bFinish = new Date(t.baselineFinish);
-                const aStart = new Date(t.start);
-                const aFinish = new Date(t.finish);
-
-                // Guard against invalid dates producing NaN
-                if (isNaN(bStart.getTime()) || isNaN(bFinish.getTime()) ||
-                    isNaN(aStart.getTime()) || isNaN(aFinish.getTime())) {
-                    t.startVariance = 0;
-                    t.finishVariance = 0;
-                    t.durationVariance = 0;
-                    return;
-                }
-
-                t.startVariance = daysBetween(bStart, aStart); // positive = late
-                t.finishVariance = daysBetween(bFinish, aFinish); // positive = late
-                t.durationVariance = (t.durationDays || 0) - (t.baselineDuration || 0);
-            } else {
-                t.startVariance = 0;
-                t.finishVariance = 0;
-                t.durationVariance = 0;
+            if (!t.baselineStart || !t.baselineFinish) {
+                t.startVariance = t.finishVariance = t.durationVariance = 0;
+                return;
             }
+            const bs = new Date(t.baselineStart), bf = new Date(t.baselineFinish);
+            const as_ = new Date(t.start),        af  = new Date(t.finish);
+            if ([bs,bf,as_,af].some(d => isNaN(d.getTime()))) {
+                t.startVariance = t.finishVariance = t.durationVariance = 0;
+                return;
+            }
+            t.startVariance    = _daysBetween(bs, as_);
+            t.finishVariance   = _daysBetween(bf, af);
+            t.durationVariance = (t.durationDays || 0) - (t.baselineDuration || 0);
         });
         return tasks;
     }
 
-    // ─── Progress Status ───
+    /* ─── Status ───────────────────────────────────────── */
 
-    /**
-     * Calculate progress status for each task
-     * Returns: 'on-track', 'at-risk', 'late', 'complete', 'not-started'
-     */
     function calculateStatus(tasks) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const today = new Date(); today.setHours(0,0,0,0);
+        const PRI = { late: 4, 'at-risk': 3, 'on-track': 2, 'not-started': 1, complete: 0 };
+        const META = {
+            complete:     ['✅','#22c55e'],
+            'not-started':['⬜','#64748b'],
+            'on-track':   ['🟢','#22c55e'],
+            'at-risk':    ['🟡','#f59e0b'],
+            late:         ['🔴','#ef4444'],
+        };
 
+        const _set = (t, s) => {
+            t.status = s;
+            [t.statusIcon, t.statusColor] = META[s] || ['⬜','#64748b'];
+        };
+
+        // Leaf tasks first
         tasks.forEach(t => {
-            if (t.summary) {
-                // Summary inherits worst child status
-                return;
-            }
+            if (t.summary) return;
 
-            if (t.percentComplete >= 100) {
-                t.status = 'complete';
-                t.statusIcon = '✅';
-                t.statusColor = '#22c55e';
-                return;
-            }
+            if (t.percentComplete >= 100) { _set(t,'complete'); return; }
 
-            const start = new Date(t.start);
+            const start  = new Date(t.start);
             const finish = new Date(t.finish);
 
-            if (today < start) {
-                t.status = 'not-started';
-                t.statusIcon = '⬜';
-                t.statusColor = '#64748b';
-                return;
-            }
+            if (today < start) { _set(t,'not-started'); return; }
 
-            // Calculate expected progress
-            const totalDuration = Math.max(daysBetween(start, finish), 1);
-            const elapsed = daysBetween(start, today);
-            const expectedPct = Math.min(100, Math.round((elapsed / totalDuration) * 100));
+            if (today > finish) { _set(t,'late'); return; }
 
-            if (today > finish && t.percentComplete < 100) {
-                t.status = 'late';
-                t.statusIcon = '🔴';
-                t.statusColor = '#ef4444';
-            } else if (t.percentComplete < expectedPct - 15) {
-                t.status = 'at-risk';
-                t.statusIcon = '🟡';
-                t.statusColor = '#f59e0b';
-            } else {
-                t.status = 'on-track';
-                t.statusIcon = '🟢';
-                t.statusColor = '#22c55e';
-            }
+            const totalDur   = Math.max(_daysBetween(start, finish), 1);
+            const elapsed    = _daysBetween(start, today);
+            const expectedPct = Math.min(100, Math.round((elapsed / totalDur) * 100));
+
+            if (t.percentComplete < expectedPct - 15) _set(t,'at-risk');
+            else _set(t,'on-track');
         });
 
-        // Summary tasks: inherit worst child status
-        const statusPriority = { 'late': 4, 'at-risk': 3, 'on-track': 2, 'not-started': 1, 'complete': 0 };
+        // Summary tasks: inherit worst child status (bottom-up)
         for (let i = tasks.length - 1; i >= 0; i--) {
             const task = tasks[i];
             if (!task.summary) continue;
             const level = task.outlineLevel || 1;
-            let worstStatus = 'complete';
-            let worstPriority = 0;
+            let worst = 'complete', worstP = 0;
             for (let j = i + 1; j < tasks.length; j++) {
                 if ((tasks[j].outlineLevel || 1) <= level) break;
-                const p = statusPriority[tasks[j].status] || 0;
-                if (p > worstPriority) {
-                    worstPriority = p;
-                    worstStatus = tasks[j].status;
-                }
+                const p = PRI[tasks[j].status] || 0;
+                if (p > worstP) { worstP = p; worst = tasks[j].status; }
             }
-            task.status = worstStatus;
-            const meta = { 'complete': ['✅','#22c55e'], 'not-started': ['⬜','#64748b'], 'on-track': ['🟢','#22c55e'], 'at-risk': ['🟡','#f59e0b'], 'late': ['🔴','#ef4444'] };
-            task.statusIcon = meta[worstStatus]?.[0] || '⬜';
-            task.statusColor = meta[worstStatus]?.[1] || '#64748b';
+            _set(task, worst);
         }
 
         return tasks;
     }
 
-    // ─── Helpers ───
-
-    function daysBetween(d1, d2) {
-        const t1 = new Date(d1); t1.setHours(0, 0, 0, 0);
-        const t2 = new Date(d2); t2.setHours(0, 0, 0, 0);
-        // P1 #12: Use working days when WorkCalendar is available
-        if (typeof WorkCalendar !== 'undefined' && WorkCalendar.getWorkingDays) {
-            return WorkCalendar.getWorkingDays(t1, t2);
-        }
-        return Math.round((t2 - t1) / 86400000);
-    }
-
-    function getMinDate(tasks) {
-        let min = Infinity;
-        tasks.forEach(t => {
-            const d = new Date(t.start).getTime();
-            if (d < min) min = d;
-        });
-        return new Date(min);
-    }
-
-    function getTypeName(type) {
-        switch (type) {
-            case 0: return 'FF';
-            case 1: return 'FS';
-            case 2: return 'SF';
-            case 3: return 'SS';
-            default: return 'FS';
-        }
-    }
     export const CPMEngine = { compute, setBaseline, calculateVariance, calculateStatus };
