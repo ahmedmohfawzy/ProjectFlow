@@ -644,14 +644,21 @@ function _getMsal() {
             // 4. Fetch task dependencies (predecessors/successors for Network/PERT)
             const depUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
-                + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype`
+                + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype,msdyn_lagduration`
                 + `&$top=500`;
 
-            const [tasksResp, assignResp, teamResp, depResp] = await Promise.all([
+            // 5. Fetch project entity for manager + scheduled dates
+            const projectEntityUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projects`
+                + `?$filter=msdyn_projectid eq '${projectId}'`
+                + `&$select=msdyn_subject,_msdyn_projectmanager_value,msdyn_scheduledstart,msdyn_scheduledend`
+                + `&$top=1`;
+
+            const [tasksResp, assignResp, teamResp, depResp, projEntityResp] = await Promise.all([
                 fetch(tasksUrl, { method: 'GET', headers: dvHeaders }),
                 fetch(assignUrl, { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
                 fetch(teamUrl, { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
                 fetch(depUrl, { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
+                fetch(projectEntityUrl, { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
             ]);
 
             if (!tasksResp.ok) {
@@ -769,6 +776,7 @@ function _getMsal() {
                         dvMap.get(successorId).dvPredecessors.push({
                             dvTaskId: predecessorId,
                             linkType: LINK_TYPES[dep.msdyn_linktype] || 'FS',
+                            lagMinutes: dep.msdyn_lagduration || 0, // in minutes from Dataverse
                         });
                     }
                 });
@@ -1018,8 +1026,8 @@ function _getMsal() {
             Prefer: 'odata.include-annotations="OData.Community.Display.V1.FormattedValue"',
         };
 
-        // Fetch tasks, assignments, team, dependencies in parallel
-        const [tasksResp, assignResp, teamResp, depResp] = await Promise.all([
+        // Fetch tasks, assignments, team, dependencies + project entity (for manager) in parallel
+        const [tasksResp, assignResp, teamResp, depResp, projEntityResp] = await Promise.all([
             fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projecttasks`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
                 + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_displaysequence,`
@@ -1042,6 +1050,11 @@ function _getMsal() {
                 + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype`
                 + `&$top=500`,
                 { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
+            fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projects`
+                + `?$filter=msdyn_projectid eq '${projectId}'`
+                + `&$select=msdyn_subject,_msdyn_projectmanager_value`
+                + `&$top=1`,
+                { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
         ]);
 
         if (!tasksResp.ok) {
@@ -1052,6 +1065,9 @@ function _getMsal() {
         const dvTasks = (await tasksResp.json()).value || [];
         const dvAssignments = assignResp.ok ? ((await assignResp.json()).value || []) : [];
         const dvTeam = teamResp.ok ? ((await teamResp.json()).value || []) : [];
+        const projEntityData = projEntityResp.ok ? ((await projEntityResp.json()).value || []) : [];
+        const projEntity = projEntityData[0] || null;
+        const _projectManagerResourceId = projEntity ? projEntity['_msdyn_projectmanager_value'] : null;
 
         console.log(`[Dataverse] Import: ${dvTasks.length} tasks, ${dvAssignments.length} assignments, ${dvTeam.length} team members`);
 
@@ -1141,6 +1157,29 @@ function _getMsal() {
             resourceSet.set(id, { uid: u, id: u, name, maxUnits: 100 });
         });
 
+        // Resolve project manager name from resNameMap (built from bookableresources)
+        let projectManagerName = null;
+        if (_projectManagerResourceId) {
+            projectManagerName = resNameMap.get(_projectManagerResourceId) || null;
+            if (!projectManagerName) {
+                // Manager may be a system user not in team — try systemusers lookup
+                try {
+                    const suResp = await fetch(
+                        `${dataverseUrl}/api/data/v9.2/systemusers`
+                            + `?$filter=systemuserid eq '${_projectManagerResourceId}'`
+                            + `&$select=fullname&$top=1`,
+                        { method: 'GET', headers: dvHeaders }
+                    ).catch(() => null);
+                    if (suResp && suResp.ok) {
+                        const suData = await suResp.json();
+                        const su = (suData.value || [])[0];
+                        if (su && su.fullname) projectManagerName = su.fullname;
+                    }
+                } catch (_) {}
+            }
+            if (projectManagerName) console.log(`[Dataverse] Project manager: ${projectManagerName}`);
+        }
+
         // Build project
         const today = new Date().toISOString().split('T')[0];
         const project = {
@@ -1151,6 +1190,7 @@ function _getMsal() {
             tasks: [],
             resources: [...resourceSet.values()],
             assignments: [],
+            projectManager: projectManagerName || '',
             _source: 'dataverse',
             _dataverseProjectId: projectId,
         };
@@ -1664,10 +1704,14 @@ function _getMsal() {
                     if (predUid) {
                         // CPM type codes: FF=0, FS=1, SF=2, SS=3
                         const TYPE_CODES = { FS: 1, FF: 0, SS: 3, SF: 2 };
+                        // Convert lag from Dataverse minutes to working days
+                        const minutesPerDay = project.minutesPerDay || 480;
+                        const lagDays = pred.lagMinutes ? Math.round(pred.lagMinutes / minutesPerDay) : 0;
                         t.predecessors.push({
                             predecessorUID: predUid,
                             type: TYPE_CODES[pred.linkType] ?? 1,
                             typeName: pred.linkType || 'FS',
+                            lag: lagDays,
                         });
                     }
                 });
@@ -2315,7 +2359,8 @@ function _getMsal() {
         }
     }
 
-    function renderSetupWizard(container, onComplete) {
+    function renderSetupWizard(container, onComplete, options = {}) {
+        // options.checkImported(planId) → { isImported, storeId, name } | { isImported: false }
         if (!container) {
             throw new Error('renderSetupWizard: container not found.');
         }
@@ -2471,6 +2516,10 @@ function _getMsal() {
 
                 const checkboxes = [];
                 plans.forEach((plan, idx) => {
+                    // Check if this plan is already imported
+                    const importStatus = options.checkImported ? options.checkImported(plan.id) : { isImported: false };
+                    const alreadyImported = importStatus.isImported;
+
                     const row = document.createElement('label');
                     row.style.cssText = `
                         display: flex; align-items: center; gap: 10px;
@@ -2478,26 +2527,40 @@ function _getMsal() {
                         border-bottom: 1px solid rgba(255,255,255,0.06);
                         color: var(--text-primary, #e2e8f0);
                         transition: background 0.15s;
+                        ${alreadyImported ? 'background:rgba(99,102,241,0.07);' : ''}
                     `;
-                    row.addEventListener('mouseenter', () => row.style.background = 'rgba(255,255,255,0.05)');
-                    row.addEventListener('mouseleave', () => row.style.background = '');
+                    row.addEventListener('mouseenter', () => row.style.background = alreadyImported ? 'rgba(99,102,241,0.13)' : 'rgba(255,255,255,0.05)');
+                    row.addEventListener('mouseleave', () => row.style.background = alreadyImported ? 'rgba(99,102,241,0.07)' : '');
 
                     const cb = document.createElement('input');
                     cb.type = 'checkbox';
                     cb.value = plan.id;
                     cb.dataset.title = plan.title;
+                    cb.dataset.existingStoreId = alreadyImported ? (importStatus.storeId || '') : '';
+                    cb.dataset.isUpdate = alreadyImported ? 'true' : 'false';
                     cb.style.cssText = 'cursor:pointer;flex-shrink:0;accent-color:#6366f1;';
                     cb.addEventListener('change', updateImportBtn);
                     checkboxes.push(cb);
 
                     const nameSpan = document.createElement('span');
                     nameSpan.textContent = plan.title;
-                    nameSpan.style.overflow = 'hidden';
-                    nameSpan.style.textOverflow = 'ellipsis';
-                    nameSpan.style.whiteSpace = 'nowrap';
+                    nameSpan.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;';
 
                     row.appendChild(cb);
                     row.appendChild(nameSpan);
+
+                    if (alreadyImported) {
+                        const badge = document.createElement('span');
+                        badge.textContent = '🔄 Already imported';
+                        badge.title = `Last imported as: "${importStatus.name || plan.title}". Selecting will refresh this project.`;
+                        badge.style.cssText = `
+                            font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;
+                            background:rgba(99,102,241,0.25);color:#a5b4fc;
+                            white-space:nowrap;flex-shrink:0;
+                        `;
+                        row.appendChild(badge);
+                    }
+
                     listWrap.appendChild(row);
                 });
                 wizard.appendChild(listWrap);
@@ -2537,15 +2600,23 @@ function _getMsal() {
 
                 function updateImportBtn() {
                     const selected = checkboxes.filter(cb => cb.checked);
+                    const updateCount = selected.filter(cb => cb.dataset.isUpdate === 'true').length;
+                    const newCount = selected.length - updateCount;
                     importBtn.disabled = selected.length === 0;
                     importBtn.style.opacity = selected.length > 0 ? '1' : '0.5';
                     importBtn.style.cursor  = selected.length > 0 ? 'pointer' : 'not-allowed';
                     if (selected.length === 0) {
                         importBtn.textContent = '📥 Import Project';
+                    } else if (selected.length === 1 && updateCount === 1) {
+                        importBtn.textContent = `🔄 Refresh Project`;
                     } else if (selected.length === 1) {
-                        importBtn.textContent = `📥 Import 1 Project`;
-                    } else {
+                        importBtn.textContent = `📥 Import Project`;
+                    } else if (newCount === 0) {
+                        importBtn.textContent = `🔄 Refresh ${selected.length} Projects`;
+                    } else if (updateCount === 0) {
                         importBtn.textContent = `📥 Import ${selected.length} Projects → Portfolio`;
+                    } else {
+                        importBtn.textContent = `📥 Import ${newCount} + 🔄 Refresh ${updateCount}`;
                     }
                 }
 
@@ -2555,16 +2626,24 @@ function _getMsal() {
 
                     importBtn.disabled = true;
                     importBtn.style.opacity = '0.7';
-                    importBtn.textContent = `⏳ Importing ${selected.length} project${selected.length > 1 ? 's' : ''}…`;
+                    importBtn.textContent = `⏳ ${selected.length > 1 ? 'Processing' : 'Loading'} ${selected.length} project${selected.length > 1 ? 's' : ''}…`;
 
                     if (selected.length === 1) {
-                        // Single plan: Dataverse import
-                        onComplete({ dataverseUrl, planId: selected[0].value, planTitle: selected[0].dataset.title });
+                        // Single plan: Dataverse import or update
+                        const cb = selected[0];
+                        onComplete({
+                            dataverseUrl,
+                            planId: cb.value,
+                            planTitle: cb.dataset.title,
+                            isUpdate: cb.dataset.isUpdate === 'true',
+                            existingStoreId: cb.dataset.existingStoreId || null,
+                        });
                     } else {
                         // Multiple plans: portfolio import
-                        const planIds    = selected.map(cb => cb.value);
-                        const planTitles = selected.map(cb => cb.dataset.title);
-                        onComplete({ dataverseUrl, planIds, planTitles, isPortfolioImport: true });
+                        const planIds         = selected.map(cb => cb.value);
+                        const planTitles      = selected.map(cb => cb.dataset.title);
+                        const existingStoreIds = selected.map(cb => cb.dataset.existingStoreId || null);
+                        onComplete({ dataverseUrl, planIds, planTitles, existingStoreIds, isPortfolioImport: true });
                     }
                 });
 

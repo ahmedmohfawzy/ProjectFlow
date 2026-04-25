@@ -156,7 +156,8 @@
             if (task.summary) return;
             task._totalFloat = Math.max(0, task._ls - task._es);
             task.totalFloat = task._totalFloat;
-            task._critical = task._totalFloat === 0;
+            // Use epsilon comparison to avoid floating-point false negatives
+            task._critical = task._totalFloat < 0.001;
             task.critical = task._critical;
         });
 

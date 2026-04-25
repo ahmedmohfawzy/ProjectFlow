@@ -262,7 +262,7 @@
             // P1 #30: Excel serial date with 1900 leap-year bug correction
             // Excel treats 1900 as leap year (it wasn't), so serial > 59 is off by 1
             const adjusted = val > 59 ? val - 1 : val;
-            return new Date(Math.round((adjusted - 25568) * 864e5));
+            return new Date(Math.round((adjusted - 25569) * 864e5));
         }
         const d = new Date(val);
         return isNaN(d.getTime()) ? null : d;

@@ -253,7 +253,8 @@ import { TeamsBridge } from './teams-bridge.js';
                 taskCount: (proj.tasks || []).length,
                 progress: this._calcProgress(proj),
                 startDate: proj.startDate ? new Date(proj.startDate).toISOString() : null,
-                finishDate: proj.finishDate ? new Date(proj.finishDate).toISOString() : null
+                finishDate: proj.finishDate ? new Date(proj.finishDate).toISOString() : null,
+                dvPlanId: proj._dataverseProjectId || null,   // track Dataverse source for update detection
             };
             if (existing >= 0) {
                 entry.color = _indexCache[existing].color;
@@ -6107,7 +6108,7 @@ import { TeamsBridge } from './teams-bridge.js';
         }
 
         // Show setup wizard — single plan OR multi-plan portfolio
-        MSGraphClient.renderSetupWizard(body, async ({ planId, planTitle, planIds, planTitles, isPortfolioImport, dataverseUrl }) => {
+        MSGraphClient.renderSetupWizard(body, async ({ planId, planTitle, planIds, planTitles, existingStoreIds, isPortfolioImport, isUpdate, existingStoreId, dataverseUrl }) => {
 
             // ── MULTI-PLAN: import each plan with live progress UI ──
             if (isPortfolioImport && planIds && planIds.length > 1) {
@@ -6200,13 +6201,17 @@ import { TeamsBridge } from './teams-bridge.js';
                             });
                             if (proj.startDate  && !(proj.startDate  instanceof Date)) proj.startDate  = new Date(proj.startDate);
                             if (proj.finishDate && !(proj.finishDate instanceof Date)) proj.finishDate = new Date(proj.finishDate);
-                            const id = ProjectStore.generateId();
+                            // Reuse existing store ID if this plan was already imported (update, not duplicate)
+                            const existingId = existingStoreIds && existingStoreIds[ri];
+                            const id = existingId || ProjectStore.generateId();
                             await ProjectStore.save(id, proj);
                             await ProjectStore.addToIndex(id, proj);
                             saved++;
                             if (planRows[ri]) {
                                 planRows[ri].icon.textContent = '✅';
-                                planRows[ri].stat.textContent = `${proj.tasks?.length || 0} tasks`;
+                                planRows[ri].stat.textContent = existingId
+                                    ? `🔄 Refreshed — ${proj.tasks?.length || 0} tasks`
+                                    : `${proj.tasks?.length || 0} tasks`;
                                 planRows[ri].stat.style.color = '#4ade80';
                             }
                         }
@@ -6240,11 +6245,12 @@ import { TeamsBridge } from './teams-bridge.js';
                     return;
                 }
 
-                // ── SINGLE-PLAN: Dataverse import ──
+                // ── SINGLE-PLAN: Dataverse import or refresh ──
                 _plannerConnectedPlanId = planId;
-                showToast('info', `Connecting to Dataverse: "${planTitle}". Importing...`);
+                const actionLabel = isUpdate ? 'Refreshing' : 'Importing';
+                showToast('info', `${actionLabel}: "${planTitle}"…`);
                 try {
-                    setStatus('Importing from Dataverse…');
+                    setStatus(`${actionLabel} from Dataverse…`);
                     const imported = await MSGraphClient.importFromDataverse(dataverseUrl, planId, planTitle);
                     if (!imported) { showToast('error', 'Import returned empty project'); return; }
                     project = imported;
@@ -6259,32 +6265,51 @@ import { TeamsBridge } from './teams-bridge.js';
                     if (project.startDate && !(project.startDate instanceof Date)) project.startDate = new Date(project.startDate);
                     if (project.finishDate && !(project.finishDate instanceof Date)) project.finishDate = new Date(project.finishDate);
                     reindexTasks();
-                    activeProjectId = ProjectStore.generateId();
+                    // Reuse existing store ID on refresh so we don't create duplicates
+                    activeProjectId = (isUpdate && existingStoreId) ? existingStoreId : ProjectStore.generateId();
+                    await ProjectStore.save(activeProjectId, project);
+                    await ProjectStore.addToIndex(activeProjectId, project);
                     onProjectLoaded();
                     // Auto-sync is disabled for one-way imports
                     _updatePlannerSyncBtn(true);
-                    showToast('success', `Imported from Planner Premium: "${project.name}" — ${project.tasks.length} items`);
+                    const verb = isUpdate ? '🔄 Refreshed' : '✅ Imported';
+                    showToast('success', `${verb} "${project.name}" — ${project.tasks.length} items`);
+                    if (project._dvHierarchyWarning) showToast('warning', project._dvHierarchyWarning);
                     toggleModal('modalPlannerSync', false);
                 } catch(e) {
                     showToast('error', 'Dataverse import failed: ' + e.message);
                 } finally { setStatus('Ready'); }
+            }, {
+                // Let the wizard mark plans that are already in ProjectStore
+                checkImported: (planId) => {
+                    const entry = ProjectStore.getIndex().find(p => p.dvPlanId === planId);
+                    return entry
+                        ? { isImported: true, storeId: entry.id, name: entry.name }
+                        : { isImported: false };
+                },
             });
         }
 
-    /** Import a Planner plan as a new ProjectFlow project */
+    /** Import a Planner plan as a new ProjectFlow project (or refresh if already imported) */
     async function handlePlannerImport(planId, dataverseUrl) {
         if (typeof MSGraphClient === 'undefined') return;
         try {
-            setStatus('Importing from Dataverse…');
+            const existingEntry = ProjectStore.getIndex().find(p => p.dvPlanId === planId);
+            const isUpdate = !!existingEntry;
+            setStatus(isUpdate ? 'Refreshing from Dataverse…' : 'Importing from Dataverse…');
             const imported = await MSGraphClient.importFromDataverse(dataverseUrl, planId, 'Project');
             if (!imported) { showToast('error', 'Import returned empty project'); return; }
             project = imported;
             _plannerConnectedPlanId = planId;
-            activeProjectId = ProjectStore.generateId();
+            activeProjectId = isUpdate ? existingEntry.id : ProjectStore.generateId();
+            await ProjectStore.save(activeProjectId, project);
+            await ProjectStore.addToIndex(activeProjectId, project);
             reindexTasks();
             onProjectLoaded();
             _updatePlannerSyncBtn(true);
-            showToast('success', `Imported from Dataverse: "${project.name}" — ${project.tasks.length} items`);
+            const verb = isUpdate ? '🔄 Refreshed' : '✅ Imported';
+            showToast('success', `${verb} "${project.name}" — ${project.tasks.length} items`);
+            if (project._dvHierarchyWarning) showToast('warning', project._dvHierarchyWarning);
             toggleModal('modalPlannerSync', false);
         } catch(e) {
             showToast('error', 'Planner import failed: ' + e.message);
@@ -6296,7 +6321,8 @@ import { TeamsBridge } from './teams-bridge.js';
      */
     async function _autoImportPlan(planId, planTitle, dataverseUrl) {
         try {
-            setStatus('Loading Planner Premium project…');
+            const existingEntry = ProjectStore.getIndex().find(p => p.dvPlanId === planId);
+            setStatus(existingEntry ? 'Refreshing Planner Premium project…' : 'Loading Planner Premium project…');
             const imported = await MSGraphClient.importFromDataverse(dataverseUrl, planId, planTitle);
             if (!imported) return;
             project = imported;
@@ -6311,11 +6337,16 @@ import { TeamsBridge } from './teams-bridge.js';
             if (project.startDate  && !(project.startDate  instanceof Date)) project.startDate  = new Date(project.startDate);
             if (project.finishDate && !(project.finishDate instanceof Date)) project.finishDate = new Date(project.finishDate);
             reindexTasks();
-            activeProjectId = ProjectStore.generateId();
+            // Reuse existing store ID on auto-refresh so we don't accumulate duplicates
+            activeProjectId = existingEntry ? existingEntry.id : ProjectStore.generateId();
+            await ProjectStore.save(activeProjectId, project);
+            await ProjectStore.addToIndex(activeProjectId, project);
             onProjectLoaded();
             TeamsBridge.saveLastPlan(planId);
             _updatePlannerSyncBtn(true);
-            showToast('success', `✅ Loaded from Planner Premium: "${planTitle}" — ${project.tasks.length} tasks`);
+            const verb = existingEntry ? '🔄 Refreshed' : '✅ Loaded';
+            showToast('success', `${verb} from Planner Premium: "${planTitle}" — ${project.tasks.length} tasks`);
+            if (project._dvHierarchyWarning) showToast('warning', project._dvHierarchyWarning);
         } catch(e) {
             showToast('error', 'Auto-import failed: ' + e.message);
         } finally { setStatus('Ready'); }

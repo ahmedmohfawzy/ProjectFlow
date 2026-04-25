@@ -31,6 +31,7 @@
 
     // ── State ──────────────────────────────────────────────────
     let _canvas, _ctx, _wrap;
+    let _allTasks = [];                  // full unfiltered task list (from last update() call)
     let _tasks = [], _nodes = [], _edges = [];
     let _nodeMap = new Map();           // uid → node
     let _succMap = new Map();           // uid → [uid]  successors
@@ -105,10 +106,12 @@
     }
 
     function update(taskList) {
-        _tasks = taskList.filter(t => !t.summary && t.isVisible !== false);
-        if (_filterMode === 'critical') _tasks = _tasks.filter(t => t.critical);
-        else if (_filterMode === 'late') _tasks = _tasks.filter(t => t.status === 'late');
-        else if (_filterMode === 'atrisk') _tasks = _tasks.filter(t => t.status === 'late' || t.status === 'at-risk' || t.critical);
+        // Always store the full (non-summary, visible) list so setFilter can re-filter from scratch
+        _allTasks = taskList.filter(t => !t.summary && t.isVisible !== false);
+        _tasks = _allTasks.slice();
+        if (_filterMode === 'critical') _tasks = _allTasks.filter(t => t.critical);
+        else if (_filterMode === 'late') _tasks = _allTasks.filter(t => t.status === 'late');
+        else if (_filterMode === 'atrisk') _tasks = _allTasks.filter(t => t.status === 'late' || t.status === 'at-risk' || t.critical);
         _clr(); _buildMaps(); _layout(); _buildStats(); _resize(); _draw();
     }
 
@@ -118,7 +121,7 @@
     }
 
     function setMode(m)          { _mode = m; if (_tasks.length) { _layout(); _resize(); _draw(); } }
-    function setFilter(f)        { _filterMode = f; update(_tasks); }
+    function setFilter(f)        { _filterMode = f; update(_allTasks); }
     function setSearch(q)        { _searchQuery = (q||'').toLowerCase(); _buildHighlight(); _draw(); }
     function zoomIn()            { _zoom(_scale * 1.2); }
     function zoomOut()           { _zoom(_scale / 1.2); }
@@ -151,7 +154,9 @@
         const bottlenecks = _tasks.filter(t => (_succMap.get(t.uid)||[]).length >= 3);
         const floatValues = _tasks.map(t => t.totalFloat).filter(v => v != null && isFinite(v));
         const avgFloat   = floatValues.length ? Math.round(floatValues.reduce((a,b)=>a+b,0)/floatValues.length) : 0;
-        const critPathLen = critTasks.reduce((s,t) => s + (t.durationDays||0), 0);
+        // Critical path length = project end date (max EF across all tasks), not sum of critical durations
+        const efValues = _allTasks.map(t => t._ef || 0).filter(v => isFinite(v));
+        const critPathLen = efValues.length ? Math.max(...efValues) : 0;
         _statsCache = { n, critCount: critTasks.length, lateCount: lateTasks.length, zeroFloatCount: zeroFloat.length, bottleneckCount: bottlenecks.length, avgFloat, critPathLen };
         // Update stats bar in toolbar
         _renderStatsBar();
@@ -184,10 +189,10 @@
 
     function _riskScore(task) {
         let r = 0;
-        if (task.totalFloat === 0)                     r += 38;
-        if (task.critical)                              r += 24;
-        if (task.status === 'late')                     r += 20;
-        if ((_succMap.get(task.uid)||[]).length >= 3)   r += 10; // bottleneck
+        // critical already implies totalFloat===0 — use one check to avoid double-counting
+        if (task.critical)                              r += 50;
+        if (task.status === 'late')                     r += 30;
+        if ((_succMap.get(task.uid)||[]).length >= 3)   r += 12; // bottleneck
         if ((task.percentComplete||0) < 20 && new Date(task.start) < new Date()) r += 8;
         return Math.min(100, r);
     }
