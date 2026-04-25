@@ -1070,31 +1070,47 @@ function _getMsal() {
         const dvAssignments = assignResp.ok ? ((await assignResp.json()).value || []) : [];
         const dvTeam = teamResp.ok ? ((await teamResp.json()).value || []) : [];
 
-        // ── Fetch task dependencies (chunked by successor task GUIDs) ──
-        // Planner Premium does NOT expose _msdyn_project_value on the dependency table
-        // → filtering by project ID causes HTTP 400.  Instead we filter by the
-        // successor task GUIDs we already know, in parallel batches of 30.
+        // ── Fetch task dependencies (no-filter, client-side match) ──
+        // Dataverse rejects $filter on lookup fields (_msdyn_successortask_value) in
+        // Planner Premium tenants → HTTP 400 on every filtered request.
+        // Solution: fetch all deps (up to 500) without any $filter, then keep only
+        // records whose successor GUID is in THIS project's task list.
         const dvDepsAll = await (async () => {
-            const taskGuids = dvTasks.map(t => (t.msdyn_projecttaskid || '').toLowerCase()).filter(Boolean);
-            if (!taskGuids.length) return [];
-            const CHUNK = 30;
-            const depSelect = '$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype';
-            const chunks = [];
-            for (let i = 0; i < taskGuids.length; i += CHUNK) {
-                const ids = taskGuids.slice(i, i + CHUNK);
-                const filter = ids.map(id => `_msdyn_successortask_value eq '${id}'`).join(' or ');
-                chunks.push(
-                    fetch(`${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies?$filter=${filter}&${depSelect}&$top=500`,
-                        { method: 'GET', headers: dvHeaders })
-                        .then(r => r.ok ? r.json() : { value: [] })
-                        .then(d => d.value || [])
-                        .catch(() => [])
+            const taskGuidSet = new Set(
+                dvTasks.map(t => (t.msdyn_projecttaskid || '').toLowerCase()).filter(Boolean)
+            );
+            if (!taskGuidSet.size) return [];
+
+            const depUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies`
+                + `?$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype`
+                + `&$top=500`;
+
+            // Use minimal headers (no Prefer annotation) for max compatibility
+            const minHeaders = {
+                Authorization: dvHeaders.Authorization,
+                'OData-MaxVersion': '4.0',
+                'OData-Version': '4.0',
+                Accept: 'application/json',
+            };
+
+            try {
+                const resp = await fetch(depUrl, { method: 'GET', headers: minHeaders });
+                if (!resp.ok) {
+                    console.warn(`[Dataverse] Dependency table not accessible (HTTP ${resp.status}) — predecessors will be empty`);
+                    return [];
+                }
+                const data = await resp.json();
+                const allDeps = data.value || [];
+                // Filter client-side: keep only deps belonging to this project's tasks
+                const projectDeps = allDeps.filter(d =>
+                    taskGuidSet.has((d._msdyn_successortask_value || '').toLowerCase())
                 );
+                console.log(`[Dataverse] Dependency fetch: ${allDeps.length} org-wide → ${projectDeps.length} for this project`);
+                return projectDeps;
+            } catch (e) {
+                console.warn('[Dataverse] Dependency fetch error:', e.message);
+                return [];
             }
-            const results = await Promise.all(chunks);
-            const flat = results.flat();
-            console.log(`[Dataverse] Dependency chunked fetch: ${flat.length} records from ${chunks.length} chunk(s)`);
-            return flat;
         })();
         const projEntityData = projEntityResp.ok ? ((await projEntityResp.json()).value || []) : [];
         const projEntity = projEntityData[0] || null;
