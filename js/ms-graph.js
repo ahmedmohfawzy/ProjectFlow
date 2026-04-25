@@ -1191,6 +1191,9 @@ function _getMsal() {
         })();
         const projEntityData = projEntityResp.ok ? ((await projEntityResp.json()).value || []) : [];
         const projEntity = projEntityData[0] || null;
+        if (projEntity) {
+            console.log('[Dataverse] Project entity keys:', Object.keys(projEntity).filter(k => !k.startsWith('@')).join(', '));
+        }
         const _projectManagerResourceId = projEntity ? projEntity['_msdyn_projectmanager_value'] : null;
 
         console.log(`[Dataverse] Import: ${dvTasks.length} tasks, ${dvAssignments.length} assignments, ${dvTeam.length} team members`);
@@ -1281,27 +1284,32 @@ function _getMsal() {
             resourceSet.set(id, { uid: u, id: u, name, maxUnits: 100 });
         });
 
-        // Resolve project manager name from resNameMap (built from bookableresources)
+        // Resolve project manager name
         let projectManagerName = null;
-        if (_projectManagerResourceId) {
-            projectManagerName = resNameMap.get(_projectManagerResourceId) || null;
-            if (!projectManagerName) {
-                // Manager may be a system user not in team — try systemusers lookup
-                try {
-                    const suResp = await fetch(
-                        `${dataverseUrl}/api/data/v9.2/systemusers`
-                            + `?$filter=systemuserid eq '${_projectManagerResourceId}'`
-                            + `&$select=fullname&$top=1`,
-                        { method: 'GET', headers: dvHeaders }
-                    ).catch(() => null);
-                    if (suResp && suResp.ok) {
-                        const suData = await suResp.json();
-                        const su = (suData.value || [])[0];
-                        if (su && su.fullname) projectManagerName = su.fullname;
-                    }
-                } catch (_) {}
+        if (projEntity) {
+            // 1. Try formatted value first (saves an API call)
+            projectManagerName = projEntity['_msdyn_projectmanager_value@OData.Community.Display.V1.FormattedValue'] || null;
+            
+            // 2. Fallback to lookup if we have an ID but no name
+            if (!projectManagerName && _projectManagerResourceId) {
+                projectManagerName = resNameMap.get(_projectManagerResourceId) || null;
+                if (!projectManagerName) {
+                    try {
+                        const suResp = await fetch(
+                            `${dataverseUrl}/api/data/v9.2/systemusers`
+                                + `?$filter=systemuserid eq '${_projectManagerResourceId}'`
+                                + `&$select=fullname&$top=1`,
+                            { method: 'GET', headers: dvHeaders }
+                        ).catch(() => null);
+                        if (suResp && suResp.ok) {
+                            const suData = await suResp.json();
+                            const su = (suData.value || [])[0];
+                            if (su && su.fullname) projectManagerName = su.fullname;
+                        }
+                    } catch (_) {}
+                }
             }
-            if (projectManagerName) console.log(`[Dataverse] Project manager: ${projectManagerName}`);
+            if (projectManagerName) console.log(`[Dataverse] Project manager resolved: ${projectManagerName}`);
         }
 
         // Build project
