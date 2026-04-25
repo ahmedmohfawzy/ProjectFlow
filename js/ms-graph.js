@@ -641,23 +641,16 @@ function _getMsal() {
                 + `&$select=msdyn_projectteamid,msdyn_name,_msdyn_bookableresourceid_value`
                 + `&$top=100`;
 
-            // 4. Fetch task dependencies (predecessors/successors for Network/PERT)
-            const depUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies`
-                + `?$filter=_msdyn_project_value eq '${projectId}'`
-                + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype`
-                + `&$top=500`;
-
-            // 5. Fetch project entity for manager + scheduled dates
+            // 4. Fetch project entity for manager + scheduled dates
             const projectEntityUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projects`
                 + `?$filter=msdyn_projectid eq '${projectId}'`
                 + `&$select=msdyn_subject,_msdyn_projectmanager_value,msdyn_scheduledstart,msdyn_scheduledend`
                 + `&$top=1`;
 
-            const [tasksResp, assignResp, teamResp, depResp, projEntityResp] = await Promise.all([
+            const [tasksResp, assignResp, teamResp, projEntityResp] = await Promise.all([
                 fetch(tasksUrl, { method: 'GET', headers: dvHeaders }),
                 fetch(assignUrl, { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
-                fetch(teamUrl, { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
-                fetch(depUrl, { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
+                fetch(teamUrl,   { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
                 fetch(projectEntityUrl, { method: 'GET', headers: dvHeaders }).catch(() => ({ ok: false })),
             ]);
 
@@ -736,35 +729,30 @@ function _getMsal() {
                 });
             });
 
-            // Parse task dependencies (predecessors for Network/PERT)
+            // ── Fetch task dependencies by successor task IDs (chunked) ──
+            // Planner Premium does NOT support _msdyn_project_value filter on
+            // msdyn_projecttaskdependencies → HTTP 400. Instead we filter by
+            // successor task GUIDs we already know, in batches of 30.
             let dvDeps = [];
-            if (depResp && depResp.ok) {
-                const depData = await depResp.json();
-                dvDeps = depData.value || [];
-            } else if (depResp && depResp.status) {
-                // First query failed — try without project filter (some environments don't have it)
-                const depErrText = await depResp.text().catch(() => '');
-                console.warn(`[MSGraph] Dependency query failed (${depResp.status}): ${depErrText.substring(0, 200)}`);
-                
-                // Fallback: fetch dependencies by task IDs (more reliable)
-                try {
-                    const taskIds = [...dvMap.keys()];
-                    if (taskIds.length > 0 && taskIds.length <= 50) {
-                        const taskFilter = taskIds.map(id => `_msdyn_successortask_value eq '${id}'`).join(' or ');
-                        const depFallbackUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies`
-                            + `?$filter=${taskFilter}`
-                            + `&$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype`
-                            + `&$top=500`;
-                        const depFallback = await fetch(depFallbackUrl, { method: 'GET', headers: dvHeaders }).catch(() => null);
-                        if (depFallback && depFallback.ok) {
-                            const fbData = await depFallback.json();
-                            dvDeps = fbData.value || [];
-                            console.log(`[MSGraph] Dependency fallback query returned ${dvDeps.length} dependencies`);
-                        }
-                    }
-                } catch (fbErr) {
-                    console.warn('[MSGraph] Dependency fallback also failed:', fbErr.message);
+            const dvTaskIds = [...dvMap.keys()]; // Dataverse task GUIDs (lowercase)
+            if (dvTaskIds.length > 0) {
+                const DEP_CHUNK = 30;
+                const depSelect = '$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype';
+                const depChunkPromises = [];
+                for (let ci = 0; ci < dvTaskIds.length; ci += DEP_CHUNK) {
+                    const chunk = dvTaskIds.slice(ci, ci + DEP_CHUNK);
+                    const filter = chunk.map(id => `_msdyn_successortask_value eq '${id}'`).join(' or ');
+                    const url = `${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies?$filter=${filter}&${depSelect}&$top=500`;
+                    depChunkPromises.push(
+                        fetch(url, { method: 'GET', headers: dvHeaders })
+                            .then(r => r.ok ? r.json() : Promise.resolve({ value: [] }))
+                            .then(d => d.value || [])
+                            .catch(() => [])
+                    );
                 }
+                const chunkResults = await Promise.all(depChunkPromises);
+                dvDeps = chunkResults.flat();
+                console.log(`[MSGraph] Dependency chunked fetch: ${dvDeps.length} records from ${depChunkPromises.length} chunk(s)`);
             }
 
             if (dvDeps.length > 0) {
