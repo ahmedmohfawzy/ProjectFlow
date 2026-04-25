@@ -475,8 +475,8 @@ import { TeamsBridge } from './teams-bridge.js';
         $('btnImportPlanner').addEventListener('click', () => els.filePlannerInput.click());
         els.filePlannerInput.addEventListener('change', handlePlannerFileSelected);
 
-        $('btnExport').addEventListener('click', handleExportXML);
-        $('btnExportExcel').addEventListener('click', handleExportCSV);
+        $('btnExport')      && $('btnExport').addEventListener('click', handleExportXML);
+        $('btnExportExcel') && $('btnExportExcel').addEventListener('click', handleExportCSV);
 
         // ── D365 direct-import exports (Excel templates) ──
         $('btnExportD365Ops')    && $('btnExportD365Ops').addEventListener('click', () => handleD365Export('operations'));
@@ -489,10 +489,10 @@ import { TeamsBridge } from './teams-bridge.js';
         $('btnCancelNewProject').addEventListener('click', () => toggleModal('modalNewProject', false));
         $('btnCloseNewProject').addEventListener('click', () => toggleModal('modalNewProject', false));
 
-        $('btnSettings').addEventListener('click', () => { populateSettingsModal(); toggleModal('modalSettings', true); });
-        $('btnCloseSettings').addEventListener('click', () => toggleModal('modalSettings', false));
-        $('btnAbout').addEventListener('click', () => toggleModal('modalAbout', true));
-        $('btnCloseAbout').addEventListener('click', () => toggleModal('modalAbout', false));
+        $('btnSettings')      && $('btnSettings').addEventListener('click', () => { populateSettingsModal(); toggleModal('modalSettings', true); });
+        $('btnCloseSettings') && $('btnCloseSettings').addEventListener('click', () => toggleModal('modalSettings', false));
+        $('btnAbout')         && $('btnAbout').addEventListener('click', () => toggleModal('modalAbout', true));
+        $('btnCloseAbout')    && $('btnCloseAbout').addEventListener('click', () => toggleModal('modalAbout', false));
         $('btnSaveSettings').addEventListener('click', handleSaveSettings);
 
         // ── Logo picker ──
@@ -819,7 +819,7 @@ import { TeamsBridge } from './teams-bridge.js';
         // MPP removed — no server-related modals or buttons
 
         // Notifications
-        $('btnNotifications').addEventListener('click', toggleNotifPanel);
+        $('btnNotifications') && $('btnNotifications').addEventListener('click', toggleNotifPanel);
         $('btnCloseNotif').addEventListener('click', () => els.notifPanel.classList.add('hidden'));
 
         // Reports
@@ -841,7 +841,7 @@ import { TeamsBridge } from './teams-bridge.js';
 
         // Phase 4: Theme, RTL, Shortcuts
         $('btnThemeToggle').addEventListener('click', toggleTheme);
-        $('btnRTLToggle').addEventListener('click', toggleRTL);
+        $('btnRTLToggle') && $('btnRTLToggle').addEventListener('click', toggleRTL);
         $('btnShortcuts').addEventListener('click', () => { populateShortcuts(); toggleModal('modalShortcuts', true); });
         if ($('shortcutSearch')) $('shortcutSearch').addEventListener('input', filterShortcuts);
 
