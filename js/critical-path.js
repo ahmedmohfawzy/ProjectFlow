@@ -85,7 +85,12 @@
         sorted.forEach(task => {
             if (task.summary) return; // Skip summary tasks
 
-            let es = 0;
+            // Calendar-based ES: how many days from project start to this task's planned start
+            // Applied to ALL tasks as a minimum floor — prevents mixing two ES coordinate systems
+            // (a late standalone task at day 380 would otherwise become the only critical task)
+            const calES = daysBetween(projectStartDate, new Date(task.start));
+
+            let es = calES; // start with calendar constraint as the floor
             if (task.predecessors && task.predecessors.length > 0) {
                 task.predecessors.forEach(pred => {
                     const predTask = taskMap.get(pred.predecessorUID);
@@ -104,10 +109,6 @@
                     }
                     es = Math.max(es, depEnd);
                 });
-            } else {
-                // Tasks without predecessors start at their own start
-                const taskStart = new Date(task.start);
-                es = daysBetween(projectStartDate, taskStart);
             }
 
             task._es = Math.max(0, es);
