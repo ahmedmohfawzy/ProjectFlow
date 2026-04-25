@@ -1166,6 +1166,15 @@ import { TeamsBridge } from './teams-bridge.js';
         recalculate();
         renderAll();
 
+        // Auto-enable columns for Dataverse/D365 projects (important data visibility)
+        if (project._source === 'dataverse' || project._source === 'd365') {
+            settings.showPlannedHours = true;
+            settings.showActualHours = true;
+            settings.showRemainingHours = true;
+            settings.showPlannedCost = true;
+            settings.showActualCost = true;
+        }
+
         // B.3: Emit project:loaded event for modules listening on EventBus
         EventBus.emit('project:loaded', { project });
         // E.5: Notify Plugin System
