@@ -1325,7 +1325,7 @@ function _getMsal() {
             tasks: [],
             resources: [...resourceSet.values()],
             assignments: [],
-            projectManager: projectManagerName || '',
+            manager: projectManagerName || '',
             _source: 'dataverse',
             _dataverseProjectId: projectId,
         };

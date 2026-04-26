@@ -125,7 +125,7 @@
         L.push('');
         L.push(`  Project  :  ${project.name}`);
         L.push(`  Date     :  ${d.fmtDateLong(d.today)}`);
-        L.push(`  Manager  :  ${project.manager || 'N/A'}`);
+        L.push(`  Manager  :  ${project.manager || project.projectManager || 'N/A'}`);
         if (d.ps && d.pf) {
             L.push(`  Period   :  ${d.fmtDate(d.ps)}  to  ${d.fmtDate(d.pf)}  (${d.daysLeft ?? '?'} days remaining)`);
         }
@@ -259,7 +259,7 @@
         L.push(`| Field | Value |`);
         L.push(`|:---|:---|`);
         L.push(`| Report Date | ${d.fmtDateLong(d.today)} |`);
-        L.push(`| Project Manager | ${project.manager || 'N/A'} |`);
+        L.push(`| Project Manager | ${project.manager || project.projectManager || 'N/A'} |`);
         if (d.ps && d.pf) L.push(`| Project Period | ${d.fmtDate(d.ps)} — ${d.fmtDate(d.pf)} |`);
         if (d.daysLeft !== null) L.push(`| Days Remaining | ${d.daysLeft} |`);
         L.push(`| Overall Status | **${d.health}** |`);
@@ -461,7 +461,7 @@
       <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:12px">
         <tr>
           <td style="font-size:11px;color:#64748b">Report Date: <strong style="color:#1e293b">${d.fmtDateLong(d.today)}</strong></td>
-          <td style="font-size:11px;color:#64748b;text-align:center">Manager: <strong style="color:#1e293b">${project.manager || 'N/A'}</strong></td>
+          <td style="font-size:11px;color:#64748b;text-align:center">Manager: <strong style="color:#1e293b">${project.manager || project.projectManager || 'N/A'}</strong></td>
           <td style="font-size:11px;color:#64748b;text-align:right">${d.ps && d.pf ? `Period: <strong style="color:#1e293b">${d.fmtDate(d.ps)} – ${d.fmtDate(d.pf)}</strong>` : ''}</td>
         </tr>
       </table>
@@ -780,7 +780,7 @@
         // Meta info
         pdf.setFontSize(10);
         pdf.setTextColor(71, 85, 105); // slate-600
-        pdf.text('Project Manager: ' + (project.manager || '--'), W / 2, 85, { align: 'center' });
+        pdf.text('Project Manager: ' + (project.manager || project.projectManager || '--'), W / 2, 85, { align: 'center' });
         pdf.text('Report Date: ' + today, W / 2, 92, { align: 'center' });
         pdf.text('Period: ' + fmtDate(project.startDate) + ' -- ' + fmtDate(project.finishDate), W / 2, 99, { align: 'center' });
 
