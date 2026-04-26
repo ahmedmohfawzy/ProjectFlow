@@ -58,6 +58,27 @@
     let _dpr = 1;
     let _touches = [], _touchDist = 0;
     let _tipEl = null;
+
+    // RAF-based draw scheduling — coalesces rapid redraws into one per frame
+    let _rafId = null;
+    function _schedDraw() {
+        if (_rafId) return;
+        _rafId = requestAnimationFrame(() => { _rafId = null; _draw(); });
+    }
+
+    // Dot-grid pattern cached as an offscreen canvas — avoids O(W×H/784) arc() calls
+    let _gridPattern = null, _gridBg = '';
+    function _getGridPattern() {
+        if (_gridPattern && _gridBg === C.bg) return _gridPattern;
+        const off = document.createElement('canvas'); off.width = 28; off.height = 28;
+        const oc  = off.getContext('2d');
+        oc.fillStyle = C.bg; oc.fillRect(0, 0, 28, 28);
+        oc.fillStyle = 'rgba(255,255,255,0.025)';
+        oc.beginPath(); oc.arc(0, 0, 1, 0, Math.PI * 2); oc.fill();
+        _gridPattern = _ctx.createPattern(off, 'repeat');
+        _gridBg = C.bg;
+        return _gridPattern;
+    }
     // Whether the source project had dependency data available.
     // false  → show "no links" banner over the diagram.
     // null   → unknown / not yet set (no banner shown).
@@ -67,9 +88,15 @@
     // Minimap
     const MM = { w: 148, h: 88, pad: 8 };
 
+    // Cached offscreen minimap — rebuilt only when layout/theme changes
+    let _mmCanvas = null, _mmDirty = true;
+    function _invalidateMinimap() { _mmDirty = true; }
+
     // ── Colors ─────────────────────────────────────────────────
     let C = {};
     function _clr() {
+        _gridPattern = null; _gridBg = ''; // invalidate cached grid on theme change
+        _invalidateMinimap();               // theme colours changed → rebuild minimap
         const s = getComputedStyle(document.documentElement);
         const g = (v,fb) => s.getPropertyValue(v).trim() || fb;
         C = {
@@ -150,6 +177,8 @@
         _canvas = canvasEl; _ctx = canvasEl.getContext('2d');
         _wrap   = canvasEl.parentElement;
         _dpr    = window.devicePixelRatio || 1;
+        // Canvas is fixed to the wrapper viewport — panning is via mouse drag, not scroll
+        if (_wrap) { _wrap.style.overflow = 'hidden'; _wrap.style.position = 'relative'; }
         _abortCtrl = new AbortController();
         const sig = _abortCtrl.signal;
         _canvas.addEventListener('wheel',      _onWheel,  { passive:false, signal:sig });
@@ -219,11 +248,19 @@
 
     function cleanup() {
         if (_abortCtrl) { _abortCtrl.abort(); _abortCtrl = null; }
+        if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
+        _gridPattern = null; _gridBg = '';
+        _mmCanvas = null; _mmDirty = true;
         _clearTip();
     }
 
-    function setMode(m)     { _mode = m; if (_tasks.length) { _layout(); _resize(); _draw(); } }
-    function setFilter(f)   { _filterMode = f; _tasks = _applyFilter(_allTasks); _clr(); _buildMaps(); _layout(); _buildStats(); _resize(); _draw(); }
+    function setMode(m)     { _mode = m; if (_tasks.length) { _layout(); _resize(); _draw(); setTimeout(() => _fit(), 60); } }
+    function setFilter(f)   {
+        _filterMode = f;
+        _tasks = _applyFilter(_allTasks);
+        _clr(); _buildMaps(); _layout(); _buildStats(); _resize(); _draw();
+        setTimeout(() => _fit(), 60);
+    }
     function setSearch(q)   { _searchQuery = (q||'').toLowerCase(); _buildHighlight(); _draw(); }
     function zoomIn()       { _zoom(_scale * 1.2); }
     function zoomOut()      { _zoom(_scale / 1.2); }
@@ -235,6 +272,7 @@
     // MAPS + STATS
     // ═══════════════════════════════════════════════════════════
     function _buildMaps() {
+        _invalidateMinimap();
         _succMap.clear(); _predMap.clear();
 
         // Build summary-to-lastLeaf lookup using the full raw list
@@ -392,6 +430,7 @@
     // ═══════════════════════════════════════════════════════════
     function _layout() {
         _nodeMap.clear(); _nodes = []; _edges = [];
+        _invalidateMinimap();
         if (!_tasks.length) return;
         const D = DIMS[_mode];
 
@@ -522,22 +561,23 @@
     }
 
     // ═══════════════════════════════════════════════════════════
-    // CANVAS
+    // CANVAS  —  fixed to wrapper size; content scrolled via pan/zoom
     // ═══════════════════════════════════════════════════════════
     function _resize() {
-        if (!_canvas) return;
-        const D = DIMS[_mode];
-        let mx=0, my=0;
-        _nodes.forEach(nd => { mx=Math.max(mx,nd.x+nd.w); my=Math.max(my,nd.y+nd.h); });
-        const pw = _wrap?.clientWidth  || 800;
-        const ph = _wrap?.clientHeight || 600;
-        const cw = Math.max(mx + D.pad*2, pw);
-        const ch = Math.max(my + D.pad*2, ph);
-        _canvas.width  = Math.floor(cw * _dpr);
-        _canvas.height = Math.floor(ch * _dpr);
-        _canvas.style.width  = cw + 'px';
-        _canvas.style.height = ch + 'px';
-        _ctx.setTransform(_dpr, 0, 0, _dpr, 0, 0);
+        if (!_canvas || !_wrap) return;
+        const pw = _wrap.clientWidth  || 800;
+        const ph = _wrap.clientHeight || 600;
+        const nw = Math.floor(pw * _dpr);
+        const nh = Math.floor(ph * _dpr);
+        // Only resize when dimensions actually change (avoids invalidating GPU texture)
+        if (_canvas.width !== nw || _canvas.height !== nh) {
+            _canvas.width  = nw; _canvas.height = nh;
+            _canvas.style.width  = pw + 'px';
+            _canvas.style.height = ph + 'px';
+            _ctx.setTransform(_dpr, 0, 0, _dpr, 0, 0);
+            _gridPattern = null; // invalidate grid pattern (new ctx backing)
+            _mmCanvas    = null; // invalidate minimap cache
+        }
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -550,23 +590,36 @@
         _ctx.clearRect(0,0,cw,ch);
         _ctx.fillStyle = C.bg; _ctx.fillRect(0,0,cw,ch);
 
-        _ctx.fillStyle = 'rgba(255,255,255,0.025)';
-        for (let x=28; x<cw; x+=28) for (let y=28; y<ch; y+=28) {
-            _ctx.beginPath(); _ctx.arc(x,y,1,0,Math.PI*2); _ctx.fill();
-        }
+        // Dot grid — use cached pattern for performance (avoids thousands of arc() calls)
+        const gp = _getGridPattern();
+        if (gp) { _ctx.fillStyle = gp; _ctx.fillRect(0, 0, cw, ch); }
 
         _ctx.translate(_panX, _panY); _ctx.scale(_scale, _scale);
+
+        // ── Viewport culling ──────────────────────────────────
+        // World-space visible bounds (with a shadow/glow margin)
+        const margin = 40 / _scale;
+        const vpX0 = (-_panX / _scale) - margin,  vpY0 = (-_panY / _scale) - margin;
+        const vpX1 = vpX0 + cw / _scale + margin*2, vpY1 = vpY0 + ch / _scale + margin*2;
 
         const hasImpact = _impactSet.size > 0;
         const hasSearch = _highlightUids.size > 0;
 
         _edges.forEach(e => {
+            // Skip if both endpoints are entirely outside viewport
+            const ex0 = Math.min(e.from.x + e.from.w, e.to.x);
+            const ex1 = Math.max(e.from.x + e.from.w, e.to.x + e.to.w);
+            const ey0 = Math.min(e.from.y, e.to.y);
+            const ey1 = Math.max(e.from.y + e.from.h, e.to.y + e.to.h);
+            if (ex1 < vpX0 || ex0 > vpX1 || ey1 < vpY0 || ey0 > vpY1) return;
             const dimmed = (hasImpact && !(_impactSet.has(e.from.task.uid) && _impactSet.has(e.to.task.uid)))
                         || (hasSearch && !(_highlightUids.has(e.from.task.uid) || _highlightUids.has(e.to.task.uid)));
             _drawEdge(e, dimmed);
         });
 
         _nodes.forEach(nd => {
+            // Skip nodes entirely outside viewport
+            if (nd.x + nd.w < vpX0 || nd.x > vpX1 || nd.y + nd.h < vpY0 || nd.y > vpY1) return;
             const dimmed = (hasImpact && !_impactSet.has(nd.task.uid))
                         || (hasSearch && !_highlightUids.has(nd.task.uid));
             _drawNode(nd, dimmed);
@@ -583,6 +636,11 @@
         if (_dependenciesAvailable === false && _nodes.length > 0) {
             _drawNoDepsBanner(cw);
         }
+
+        // Critical path filter with no edges → show explanation overlay
+        if (_filterMode === 'critical' && _edges.length === 0 && _nodes.length > 0) {
+            _drawCritFilterNoDepsMsg(cw);
+        }
     }
 
     // ── Edge ──────────────────────────────────────────────────
@@ -595,8 +653,8 @@
 
         _ctx.save();
         _ctx.strokeStyle = color; _ctx.lineWidth = lw; _ctx.lineJoin = 'round';
-        if (isCrit && !dimmed) {
-            // Strong double-pass glow for critical edges
+        if (isCrit && !dimmed && _scale > 0.22) {
+            // Strong double-pass glow for critical edges (skip at very low zoom)
             _ctx.shadowColor = C.critGlow; _ctx.shadowBlur = 18;
         }
         if (type !== 'FS') _ctx.setLineDash([5,4]);
@@ -638,10 +696,12 @@
         _ctx.save();
         _ctx.globalAlpha = alpha;
 
-        if ((isHov || isSel) && !dimmed) {
+        // Skip expensive shadowBlur at very low zoom — nodes are too small to show it
+        const _canGlow = _scale > 0.22;
+        if (_canGlow && (isHov || isSel) && !dimmed) {
             _ctx.shadowColor = isCrit ? C.critGlow : 'rgba(99,102,241,0.55)';
             _ctx.shadowBlur  = isSel ? 24 : 16;
-        } else if (isCrit && !dimmed) {
+        } else if (_canGlow && isCrit && !dimmed) {
             // Stronger glow so critical nodes stand out even when zoomed far out
             _ctx.shadowColor = C.critGlow; _ctx.shadowBlur = 22;
         }
@@ -659,29 +719,20 @@
             _ctx.restore(); return;
         }
 
-        // Critical fill is more saturated so the node stands out
-        _ctx.fillStyle = isCrit ? 'rgba(239,68,68,0.20)' : isDone ? 'rgba(34,197,94,0.07)' : isLate ? 'rgba(245,158,11,0.07)' : C.surf;
+        // Node body fill
+        _ctx.fillStyle = isCrit ? 'rgba(239,68,68,0.18)' : isDone ? 'rgba(34,197,94,0.07)' : isLate ? 'rgba(245,158,11,0.07)' : C.surf;
         _rr(x, y, w, h, 8); _ctx.fill();
 
+        // Left risk-colour strip — simple 4px rect (was a complex arcTo path)
         const riskCol = _riskColor(risk);
         _ctx.fillStyle = riskCol;
-        _ctx.beginPath();
-        _ctx.moveTo(x+8,y); _ctx.arcTo(x,y,x,y+8,8);
-        _ctx.lineTo(x,y+h-8); _ctx.arcTo(x,y+h,x+8,y+h,8);
-        _ctx.lineTo(x+4,y+h); _ctx.lineTo(x+4,y); _ctx.closePath(); _ctx.fill();
+        _ctx.fillRect(x, y + 8, 4, h - 16);
 
-        _ctx.shadowBlur=0;
+        // Border — shadow is cleared before stroke so it doesn't double-glow
+        _ctx.shadowBlur = 0;
         _ctx.strokeStyle = (isHov||isSel) ? (isCrit?C.crit:C.acc) : isCrit ? C.crit : C.bord;
-        // Critical border 3px, gives a clear red frame even when zoomed out
-        _ctx.lineWidth   = (isHov||isSel) ? 2.5 : isCrit ? 3 : 1;
+        _ctx.lineWidth   = (isHov||isSel) ? 2.5 : isCrit ? 2.5 : 1;
         _rr(x, y, w, h, 8); _ctx.stroke();
-
-        // Extra outer glow ring for critical nodes — drawn as a hairline outside the main border
-        if (isCrit && !dimmed && !isHov && !isSel) {
-            _ctx.strokeStyle = 'rgba(239,68,68,0.30)';
-            _ctx.lineWidth   = 6;
-            _rr(x-3, y-3, w+6, h+6, 11); _ctx.stroke();
-        }
 
         if (isBotl) {
             _ctx.fillStyle = C.bottle;
@@ -821,28 +872,57 @@
     }
 
     // ── Minimap ───────────────────────────────────────────────
-    function _drawMinimap(cw, ch) {
-        const mx=cw-MM.w-MM.pad, my=ch-MM.h-MM.pad;
+    // Node dots are cached on an offscreen canvas (_mmCanvas).
+    // Only the viewport rectangle is drawn live (changes every pan/zoom).
+    let _mmBounds = { x0:0, x1:1, y0:0, y1:1, sc:1 }; // cached world bounds
+
+    function _rebuildMinimapCache() {
+        if (!_nodes.length) return;
         let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
         _nodes.forEach(n => { x0=Math.min(x0,n.x); x1=Math.max(x1,n.x+n.w); y0=Math.min(y0,n.y); y1=Math.max(y1,n.y+n.h); });
         const dw=x1-x0||1, dh=y1-y0||1;
         const sc=Math.min((MM.w-6)/dw,(MM.h-6)/dh, 0.25);
-        _ctx.fillStyle='rgba(8,9,16,0.92)'; _rrp(mx,my,MM.w,MM.h,7); _ctx.fill();
-        _ctx.strokeStyle='rgba(255,255,255,0.07)'; _ctx.lineWidth=1; _rrp(mx,my,MM.w,MM.h,7); _ctx.stroke();
-        _ctx.save(); _ctx.beginPath(); _ctx.rect(mx+1,my+1,MM.w-2,MM.h-2); _ctx.clip();
+        _mmBounds = { x0, x1, y0, y1, sc };
+
+        if (!_mmCanvas) { _mmCanvas = document.createElement('canvas'); }
+        _mmCanvas.width = MM.w; _mmCanvas.height = MM.h;
+        const mc = _mmCanvas.getContext('2d');
+
+        // Background pill
+        mc.clearRect(0, 0, MM.w, MM.h);
+        mc.fillStyle = 'rgba(8,9,16,0.92)';
+        mc.beginPath(); mc.roundRect(0, 0, MM.w, MM.h, 7); mc.fill();
+        mc.strokeStyle = 'rgba(255,255,255,0.07)'; mc.lineWidth = 1;
+        mc.beginPath(); mc.roundRect(0, 0, MM.w, MM.h, 7); mc.stroke();
+
+        // Node dots
+        mc.save(); mc.beginPath(); mc.rect(1, 1, MM.w-2, MM.h-2); mc.clip();
         _nodes.forEach(n => {
-            const nw=Math.max(3,n.w*sc), nh=Math.max(2,n.h*sc);
-            const nx=mx+3+(n.x-x0)*sc, ny=my+3+(n.y-y0)*sc;
-            _ctx.globalAlpha = _impactSet.size>0 ? (_impactSet.has(n.task.uid)?0.9:0.18) : 0.7;
-            _ctx.fillStyle=n.task.critical?C.crit:n.task.percentComplete>=100?C.done:n.task.status==='late'?C.late:C.acc;
-            _ctx.fillRect(nx,ny,nw,nh);
+            const nw=Math.max(3, n.w*sc), nh=Math.max(2, n.h*sc);
+            const nx=3+(n.x-x0)*sc,      ny=3+(n.y-y0)*sc;
+            mc.globalAlpha = 0.7;
+            mc.fillStyle = n.task.critical?C.crit:n.task.percentComplete>=100?C.done:n.task.status==='late'?C.late:C.acc;
+            mc.fillRect(nx, ny, nw, nh);
         });
-        _ctx.globalAlpha=1;
-        const vw=(_wrap?.clientWidth||800)/_scale, vh=(_wrap?.clientHeight||600)/_scale;
-        const vx=mx+3+(-_panX/_scale-x0)*sc, vy=my+3+(-_panY/_scale-y0)*sc;
-        _ctx.strokeStyle='rgba(255,255,255,0.6)'; _ctx.lineWidth=1.5;
-        _ctx.strokeRect(vx,vy,vw*sc,vh*sc);
-        _ctx.restore();
+        mc.restore();
+        _mmDirty = false;
+    }
+
+    function _drawMinimap(cw, ch) {
+        if (!_nodes.length) return;
+        if (_mmDirty || !_mmCanvas) _rebuildMinimapCache();
+
+        const mx = cw - MM.w - MM.pad, my = ch - MM.h - MM.pad;
+        _ctx.drawImage(_mmCanvas, mx, my);
+
+        // Viewport indicator — drawn live since it changes every pan/zoom
+        const {x0, y0, sc} = _mmBounds;
+        const vw = (_wrap.clientWidth  || 800) / _scale;
+        const vh = (_wrap.clientHeight || 600) / _scale;
+        const vx = mx+3+(-_panX/_scale-x0)*sc;
+        const vy = my+3+(-_panY/_scale-y0)*sc;
+        _ctx.strokeStyle = 'rgba(255,255,255,0.65)'; _ctx.lineWidth = 1.5;
+        _ctx.strokeRect(Math.round(vx), Math.round(vy), Math.round(vw*sc), Math.round(vh*sc));
     }
 
     // ── Legend ────────────────────────────────────────────────
@@ -868,6 +948,37 @@
         _ctx.fillText('No tasks available for Network view', cw/2, ch/2-16);
         _ctx.font='11px Inter,sans-serif';
         _ctx.fillText('Import a project with tasks to see the Network / PERT diagram', cw/2, ch/2+10);
+    }
+
+    /**
+     * Draw an overlay when Critical Path filter is active but no dependency edges
+     * exist (either because deps unavailable or this filter has no linked tasks).
+     * Shown at top of canvas in fixed position.
+     */
+    function _drawCritFilterNoDepsMsg(cw) {
+        _ctx.save();
+        const bH = 52, pad = 14, top = (_dependenciesAvailable === false) ? 62 : 14;
+        _ctx.fillStyle = 'rgba(239,68,68,0.10)';
+        _ctx.strokeStyle = 'rgba(239,68,68,0.45)';
+        _ctx.lineWidth = 1;
+        _rrp(pad, top, cw - pad * 2, bH, 8); _ctx.fill();
+        _rrp(pad, top, cw - pad * 2, bH, 8); _ctx.stroke();
+
+        _ctx.fillStyle = '#ef4444';
+        _ctx.font = `600 11.5px Inter,sans-serif`;
+        _ctx.textAlign = 'center';
+        _ctx.textBaseline = 'middle';
+        _ctx.fillText(
+            '🔴 Critical Path — showing tasks with zero float (no predecessor links found)',
+            cw / 2, top + 16
+        );
+        _ctx.fillStyle = 'rgba(233,233,233,0.55)';
+        _ctx.font = `400 10px Inter,sans-serif`;
+        _ctx.fillText(
+            'Import an MS Project .xml file with predecessor data to see the connected critical path',
+            cw / 2, top + 34
+        );
+        _ctx.restore();
     }
 
     /**
@@ -923,10 +1034,13 @@
         ctx.fillStyle = C.bg || '#0f1117';
         ctx.fillRect(0, 0, outW, outH);
 
-        ctx.fillStyle = 'rgba(255,255,255,0.025)';
-        for (let x=28; x<outW; x+=28) for (let y=28; y<outH; y+=28) {
-            ctx.beginPath(); ctx.arc(x,y,1,0,Math.PI*2); ctx.fill();
-        }
+        // Dot grid for export
+        const exportOff = document.createElement('canvas'); exportOff.width = 28; exportOff.height = 28;
+        const eo = exportOff.getContext('2d');
+        eo.fillStyle = C.bg || '#0f1117'; eo.fillRect(0,0,28,28);
+        eo.fillStyle = 'rgba(255,255,255,0.025)'; eo.beginPath(); eo.arc(0,0,1,0,Math.PI*2); eo.fill();
+        const ep = ctx.createPattern(exportOff, 'repeat');
+        if (ep) { ctx.fillStyle = ep; ctx.fillRect(0, 0, outW, outH); }
 
         ctx.save();
         ctx.translate((-x0 + PAD) * scale, (-y0 + PAD) * scale);
@@ -963,7 +1077,7 @@
         const {cx,cy}=_cxy(e);
         const ns=Math.min(3,Math.max(0.15,_scale*(e.deltaY>0?0.88:1.14)));
         _panX=cx-(cx-_panX)*(ns/_scale); _panY=cy-(cy-_panY)*(ns/_scale);
-        _scale=ns; _draw();
+        _scale=ns; _schedDraw();
     }
     function _onDown(e) {
         _clearTip();
@@ -982,14 +1096,14 @@
         if (newHov!==_hovUid) {
             _hovUid=newHov;
             _canvas.style.cursor=hit?'pointer':(_isPanning?'grabbing':'grab');
-            _draw();
+            _schedDraw();
             if (hit) _showTip(e.clientX-_canvas.getBoundingClientRect().left, e.clientY-_canvas.getBoundingClientRect().top, hit);
             else _clearTip();
         }
-        if (_isPanning) { _panX=e.clientX-_pStart.x; _panY=e.clientY-_pStart.y; _draw(); }
+        if (_isPanning) { _panX=e.clientX-_pStart.x; _panY=e.clientY-_pStart.y; _schedDraw(); }
     }
     function _onUp()    { _isPanning=false; _canvas.style.cursor=_hovUid?'pointer':'grab'; }
-    function _onLeave() { _isPanning=false; _hovUid=null; _clearTip(); _draw(); }
+    function _onLeave() { _isPanning=false; _hovUid=null; _clearTip(); _schedDraw(); }
     function _onDbl(e) {
         const {x,y}=_xy(e); const hit=_hit(x,y);
         if (hit) _canvas.dispatchEvent(new CustomEvent('nodeDoubleClick',{bubbles:true,detail:{task:hit.task}}));
@@ -1065,11 +1179,11 @@
 
     // ── Touch ─────────────────────────────────────────────────
     function _onTS(e) { e.preventDefault(); _touches=[...e.touches]; if (_touches.length===2) _touchDist=Math.hypot(_touches[0].clientX-_touches[1].clientX,_touches[0].clientY-_touches[1].clientY); else { _isPanning=true; _pStart={x:_touches[0].clientX-_panX,y:_touches[0].clientY-_panY}; } }
-    function _onTM(e) { e.preventDefault(); _touches=[...e.touches]; if (_touches.length===2) { const d=Math.hypot(_touches[0].clientX-_touches[1].clientX,_touches[0].clientY-_touches[1].clientY); _zoom(_scale*(d/(_touchDist||1))); _touchDist=d; } else if (_isPanning) { _panX=_touches[0].clientX-_pStart.x; _panY=_touches[0].clientY-_pStart.y; _draw(); } }
+    function _onTM(e) { e.preventDefault(); _touches=[...e.touches]; if (_touches.length===2) { const d=Math.hypot(_touches[0].clientX-_touches[1].clientX,_touches[0].clientY-_touches[1].clientY); _zoom(_scale*(d/(_touchDist||1))); _touchDist=d; } else if (_isPanning) { _panX=_touches[0].clientX-_pStart.x; _panY=_touches[0].clientY-_pStart.y; _schedDraw(); } }
     function _onTE()  { _isPanning=false; _touches=[]; }
 
     // ── Zoom / Fit ────────────────────────────────────────────
-    function _zoom(ns) { _scale=Math.min(3,Math.max(0.12,ns)); _draw(); }
+    function _zoom(ns) { _scale=Math.min(3,Math.max(0.12,ns)); _schedDraw(); }
     function _fit() {
         if (!_nodes.length||!_wrap) return;
         let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
