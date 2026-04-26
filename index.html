@@ -42,7 +42,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="ProjectFlow">
-  <script type="module" crossorigin src="/ProjectFlow/assets/main-Ban2FAJg.js"></script>
+  <script type="module" crossorigin src="/ProjectFlow/assets/main-AJJRNR9D.js"></script>
   <link rel="modulepreload" crossorigin href="/ProjectFlow/assets/modulepreload-polyfill-wMinxHhO.js">
   <link rel="stylesheet" crossorigin href="/ProjectFlow/assets/main-Bw_rbSpr.css">
 </head>
@@ -706,8 +706,8 @@
                     </div>
                     <div class="pf-command-right">
                         <div class="pf-view-toggle">
-                            <button class="pf-vtoggle active" data-pfview="dashboard">Dashboard</button>
-                            <button class="pf-vtoggle" data-pfview="table">Table</button>
+                            <button class="pf-vtoggle" data-pfview="dashboard">Dashboard</button>
+                            <button class="pf-vtoggle active" data-pfview="table">Table</button>
                             <button class="pf-vtoggle" data-pfview="timeline">Timeline</button>
                             <button class="pf-vtoggle" data-pfview="resources">👥 Resources</button>
                         </div>
@@ -770,7 +770,7 @@
                 </div>
 
                 <!-- Dashboard View -->
-                <div id="pfDashboardView">
+                <div id="pfDashboardView" class="hidden">
                     <div class="pf-charts-row">
                         <!-- Progress Comparison -->
                         <div class="pf-card">
@@ -830,8 +830,8 @@
                     </div>
                 </div>
 
-                <!-- Table View -->
-                <div id="pfTableView" class="hidden">
+                <!-- Table View — default view, grouped by Project Manager -->
+                <div id="pfTableView">
                     <div class="pf-card">
                         <table class="pf-projects-table" id="portfolioProjectTable">
                             <thead><tr>
@@ -1291,6 +1291,17 @@
                 <button class="modal-close" id="btnCloseReport">&times;</button>
             </div>
             <div class="modal-body">
+                <!-- Project info bar — editable before export -->
+                <div style="display:flex;align-items:center;gap:16px;background:var(--bg-tertiary,#1e2130);border:1px solid var(--border-color,#2a2d3e);border-radius:8px;padding:10px 16px;margin-bottom:14px">
+                    <div style="flex:1;min-width:0">
+                        <div style="font-size:0.68rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);margin-bottom:3px">Project</div>
+                        <div id="rptProjectName" style="font-size:0.88rem;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">—</div>
+                    </div>
+                    <div style="flex:1;min-width:0">
+                        <label for="rptManagerInput" style="display:block;font-size:0.68rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);margin-bottom:3px">Project Manager</label>
+                        <input type="text" id="rptManagerInput" class="form-input" placeholder="Enter project manager name…" style="font-size:0.82rem;padding:4px 8px;height:28px">
+                    </div>
+                </div>
                 <div class="report-grid">
                     <div class="report-option" id="rptPDF">
                         <div class="report-icon">📋</div>
