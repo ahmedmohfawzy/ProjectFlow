@@ -315,28 +315,32 @@
         });
 
         /* ── 7b. Dataverse isCritical override ──
-         * When no predecessor links were resolved (Planner import, no dep data),
-         * CPM marks every isolated task as critical (TF=0), which is misleading.
-         * If Dataverse provided msdyn_iscritical on tasks (Planner Premium / Project
-         * for the Web), use that as the authoritative critical flag instead.
-         * This ensures the correct critical path is shown even before dep links work.
+         * Planner Premium / Project for the Web uses a calendar-aware, resource-aware
+         * scheduler that accounts for weekends, holidays, and constraints — our simple
+         * duration-based CPM cannot replicate this exactly and will produce different
+         * TF values.  Whenever Dataverse supplies msdyn_iscritical on ANY leaf task,
+         * treat it as the authoritative critical path and override our calculation.
+         *
+         * This applies regardless of whether dep links were resolved: even with 122+
+         * dependency records, the day-offset CPM may disagree with Planner's scheduler.
          */
-        if (!tasks._cpmDepsAvailable) {
-            const dvCritCount = tasks.filter(t => !t.summary && t.isCritical === true).length;
-            if (dvCritCount > 0) {
-                // Dataverse has authoritative critical flags → use them
-                tasks.forEach(task => {
-                    if (task.summary) return;
-                    task._critical = task.isCritical === true;
-                    task.critical  = task._critical;
-                    // Zero float only for truly critical tasks from Dataverse
-                    if (!task._critical) {
-                        task._totalFloat = task.durationDays || 1;
-                        task.totalFloat  = task._totalFloat;
-                    }
-                });
-                console.log(`[CPM] No dep links — using ${dvCritCount} Dataverse msdyn_iscritical flags as critical path`);
-            }
+        const dvCritCount = tasks.filter(t => !t.summary && t.isCritical === true).length;
+        if (dvCritCount > 0) {
+            tasks.forEach(task => {
+                if (task.summary) return;
+                task._critical = task.isCritical === true;
+                task.critical  = task._critical;
+                // Non-critical tasks get a nominal float so the filter hides them
+                if (!task._critical && task._totalFloat < 0.001) {
+                    task._totalFloat = task.durationDays || 1;
+                    task.totalFloat  = task._totalFloat;
+                }
+            });
+            console.log(`[CPM] Dataverse msdyn_iscritical applied: ${dvCritCount} critical tasks (overrides CPM TF)`);
+        } else if (!tasks._cpmDepsAvailable) {
+            // No Dataverse flags AND no dep links → all tasks wrongly appear critical.
+            // Nothing useful to show; leave as-is and let the UI show the banner.
+            console.log('[CPM] No Dataverse isCritical flags and no dep links — CPM result may be misleading');
         }
 
         /* ── 8. Free Float ── */

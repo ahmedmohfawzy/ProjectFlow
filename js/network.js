@@ -278,15 +278,53 @@
         // Build summary-to-lastLeaf lookup using the full raw list
         const summaryLastLeaf = _buildSummaryLastLeaf(_allTasksRaw);
 
-        // Visible UID set
+        // Full UID set (all non-summary visible tasks — before filter)
+        const allUids     = new Set(_allTasks.map(t => t.uid));
+        // Filtered visible set (e.g. only critical tasks when filter='critical')
         const visibleUids = new Set(_tasks.map(t => t.uid));
 
-        // Store resolved preds on each task for layout + edge drawing
-        _tasks.forEach(t => {
-            t._resolvedPreds = _resolveEffectivePreds(t, visibleUids, summaryLastLeaf);
-            _succMap.set(t.uid, []);
-            _predMap.set(t.uid, []);
+        // ── Pre-compute resolved preds for ALL tasks against the full set ──
+        // These are cached as _allResolvedPreds and used for transitive edge resolution.
+        _allTasks.forEach(t => {
+            t._allResolvedPreds = _resolveEffectivePreds(t, allUids, summaryLastLeaf);
         });
+
+        // Full pred map (all tasks) for transitive ancestor search
+        const fullPredMap = new Map(_allTasks.map(t => [t.uid, t._allResolvedPreds]));
+
+        if (_filterMode === 'critical' && visibleUids.size < allUids.size) {
+            // ── Critical filter: trace transitive edges through non-critical tasks ──
+            // If the chain is  A(crit) → B(non-crit) → C(crit), draw A→C directly.
+            // This ensures the critical chain is connected even when intermediate tasks
+            // are not on the critical path.
+            _tasks.forEach(t => {
+                const critPreds = [];
+                const visited   = new Set();
+                const findCritAncestors = uid => {
+                    (fullPredMap.get(uid) || []).forEach(p => {
+                        const pid = p.predecessorUID;
+                        if (visited.has(pid)) return;
+                        visited.add(pid);
+                        if (visibleUids.has(pid)) {
+                            critPreds.push({ ...p, predecessorUID: pid });
+                        } else {
+                            findCritAncestors(pid); // walk through non-critical
+                        }
+                    });
+                };
+                findCritAncestors(t.uid);
+                t._resolvedPreds = critPreds;
+                _succMap.set(t.uid, []);
+                _predMap.set(t.uid, []);
+            });
+        } else {
+            // ── Normal filter: resolve preds only within visible set ──
+            _tasks.forEach(t => {
+                t._resolvedPreds = _resolveEffectivePreds(t, visibleUids, summaryLastLeaf);
+                _succMap.set(t.uid, []);
+                _predMap.set(t.uid, []);
+            });
+        }
 
         _tasks.forEach(t => {
             t._resolvedPreds.forEach(p => {
