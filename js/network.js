@@ -310,6 +310,44 @@
             if (item.color) v.style.color = item.color;
             span.appendChild(k); span.appendChild(v); el.appendChild(span);
         });
+
+        // "Trace Critical Path" button — fits view to critical nodes only
+        if (s.critCount > 0) {
+            const btn = document.createElement('button');
+            btn.textContent = '🔴 Trace Critical Path';
+            btn.title = 'Fit view to critical tasks only (keyboard: C)';
+            btn.style.cssText = [
+                'margin-left:auto', 'padding:3px 10px', 'border-radius:5px', 'cursor:pointer',
+                'font-size:0.7rem', 'font-weight:700', 'border:1.5px solid #ef4444',
+                'background:rgba(239,68,68,0.13)', 'color:#ef4444',
+                'transition:background 0.15s',
+            ].join(';');
+            btn.addEventListener('mouseenter', () => btn.style.background = 'rgba(239,68,68,0.25)');
+            btn.addEventListener('mouseleave', () => btn.style.background = 'rgba(239,68,68,0.13)');
+            btn.addEventListener('click', () => {
+                // Switch to critical-only filter and fit to those nodes
+                const wasFilter = _filterMode;
+                if (_filterMode !== 'critical') {
+                    _filterMode = 'critical';
+                    _tasks = _applyFilter(_allTasks);
+                    _clr(); _buildMaps(); _layout(); _buildStats(); _resize(); _draw();
+                    btn.textContent = '◀ Show All';
+                    btn.style.borderColor = '#818cf8';
+                    btn.style.color = '#818cf8';
+                    btn.style.background = 'rgba(129,140,248,0.13)';
+                } else {
+                    _filterMode = 'all';
+                    _tasks = _applyFilter(_allTasks);
+                    _clr(); _buildMaps(); _layout(); _buildStats(); _resize(); _draw();
+                    btn.textContent = '🔴 Trace Critical Path';
+                    btn.style.borderColor = '#ef4444';
+                    btn.style.color = '#ef4444';
+                    btn.style.background = 'rgba(239,68,68,0.13)';
+                }
+                setTimeout(() => _fit(), 80);
+            });
+            el.appendChild(btn);
+        }
     }
 
     function _riskScore(task) {
@@ -552,11 +590,15 @@
         const {from:s, to:t, isCrit, type} = e;
         const isHov = _hovUid && (s.task.uid===_hovUid || t.task.uid===_hovUid);
         const color = dimmed ? C.eDim : isHov ? C.eHov : isCrit ? C.eCrit : C.eNorm;
-        const lw    = isHov ? 2.5 : isCrit ? 2 : 1.5;
+        // Critical edges are 3.5× thicker so the path is visible even when zoomed out
+        const lw    = isHov ? 2.5 : isCrit ? 3.5 : 1.5;
 
         _ctx.save();
         _ctx.strokeStyle = color; _ctx.lineWidth = lw; _ctx.lineJoin = 'round';
-        if (isCrit && !dimmed) { _ctx.shadowColor = C.critGlow; _ctx.shadowBlur = 6; }
+        if (isCrit && !dimmed) {
+            // Strong double-pass glow for critical edges
+            _ctx.shadowColor = C.critGlow; _ctx.shadowBlur = 18;
+        }
         if (type !== 'FS') _ctx.setLineDash([5,4]);
 
         const x1=s.x+s.w, y1=Math.floor(s.y+s.h/2);
@@ -568,7 +610,10 @@
         _ctx.stroke();
 
         _ctx.setLineDash([]); _ctx.shadowBlur=0; _ctx.fillStyle=color;
-        _ctx.beginPath(); _ctx.moveTo(x2,y2); _ctx.lineTo(x2-8,y2-4); _ctx.lineTo(x2-8,y2+4); _ctx.closePath(); _ctx.fill();
+        // Larger arrowhead on critical edges
+        const ah = isCrit && !dimmed ? 11 : 8;
+        const av = isCrit && !dimmed ?  5 : 4;
+        _ctx.beginPath(); _ctx.moveTo(x2,y2); _ctx.lineTo(x2-ah,y2-av); _ctx.lineTo(x2-ah,y2+av); _ctx.closePath(); _ctx.fill();
 
         if (type !== 'FS' && !dimmed) {
             _ctx.fillStyle = isHov ? C.eHov : C.dim;
@@ -595,9 +640,10 @@
 
         if ((isHov || isSel) && !dimmed) {
             _ctx.shadowColor = isCrit ? C.critGlow : 'rgba(99,102,241,0.55)';
-            _ctx.shadowBlur  = isSel ? 20 : 14;
+            _ctx.shadowBlur  = isSel ? 24 : 16;
         } else if (isCrit && !dimmed) {
-            _ctx.shadowColor = C.critGlow; _ctx.shadowBlur = 5;
+            // Stronger glow so critical nodes stand out even when zoomed far out
+            _ctx.shadowColor = C.critGlow; _ctx.shadowBlur = 22;
         }
 
         if (isMile) {
@@ -613,7 +659,8 @@
             _ctx.restore(); return;
         }
 
-        _ctx.fillStyle = isCrit ? C.critFill : isDone ? 'rgba(34,197,94,0.07)' : isLate ? 'rgba(245,158,11,0.07)' : C.surf;
+        // Critical fill is more saturated so the node stands out
+        _ctx.fillStyle = isCrit ? 'rgba(239,68,68,0.20)' : isDone ? 'rgba(34,197,94,0.07)' : isLate ? 'rgba(245,158,11,0.07)' : C.surf;
         _rr(x, y, w, h, 8); _ctx.fill();
 
         const riskCol = _riskColor(risk);
@@ -625,8 +672,16 @@
 
         _ctx.shadowBlur=0;
         _ctx.strokeStyle = (isHov||isSel) ? (isCrit?C.crit:C.acc) : isCrit ? C.crit : C.bord;
-        _ctx.lineWidth   = (isHov||isSel) ? 2 : isCrit ? 1.5 : 1;
+        // Critical border 3px, gives a clear red frame even when zoomed out
+        _ctx.lineWidth   = (isHov||isSel) ? 2.5 : isCrit ? 3 : 1;
         _rr(x, y, w, h, 8); _ctx.stroke();
+
+        // Extra outer glow ring for critical nodes — drawn as a hairline outside the main border
+        if (isCrit && !dimmed && !isHov && !isSel) {
+            _ctx.strokeStyle = 'rgba(239,68,68,0.30)';
+            _ctx.lineWidth   = 6;
+            _rr(x-3, y-3, w+6, h+6, 11); _ctx.stroke();
+        }
 
         if (isBotl) {
             _ctx.fillStyle = C.bottle;
