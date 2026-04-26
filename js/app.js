@@ -251,6 +251,7 @@ import { TeamsBridge } from './teams-bridge.js';
             const existing = _indexCache.findIndex(p => p.id === id);
             const entry = {
                 id, name: proj.name || 'Untitled',
+                manager: proj.manager || proj.projectManager || '',
                 color: PROJECT_COLORS[_indexCache.length % PROJECT_COLORS.length],
                 pinned: false,
                 lastModified: new Date().toISOString(),
@@ -823,7 +824,16 @@ import { TeamsBridge } from './teams-bridge.js';
         $('btnCloseNotif').addEventListener('click', () => els.notifPanel.classList.add('hidden'));
 
         // Reports
-        $('btnReports').addEventListener('click', () => { if (project) toggleModal('modalReport', true); });
+        $('btnReports').addEventListener('click', () => {
+            if (project) {
+                // Pre-fill the PM field from the current project
+                const pmInput = $('rptManagerInput');
+                if (pmInput) pmInput.value = project.manager || project.projectManager || '';
+                const rptName = $('rptProjectName');
+                if (rptName) rptName.textContent = project.name || '—';
+                toggleModal('modalReport', true);
+            }
+        });
         $('btnCloseReport').addEventListener('click', () => toggleModal('modalReport', false));
         $('modalReport').addEventListener('click', (e) => { if (e.target === $('modalReport')) toggleModal('modalReport', false); });
 
@@ -2688,6 +2698,18 @@ import { TeamsBridge } from './teams-bridge.js';
             if (typeof window.jspdf === 'undefined') {
                 showToast('error', 'PDF library not loaded. Check internet connection.');
                 return;
+            }
+            // Apply PM name from the editable field (saves back to project + index)
+            const pmInput = $('rptManagerInput');
+            if (pmInput) {
+                const pmName = pmInput.value.trim();
+                if (pmName) {
+                    project.manager = pmName;
+                    // Persist to index so portfolio view reflects it
+                    const meta = ProjectStore.getIndex().find(m => m.id === activeProjectId);
+                    if (meta) { meta.manager = pmName; ProjectStore._syncIndexToLS(); }
+                    autoSave();
+                }
             }
             const canvas = $('ganttCanvas');
             const filename = await Reports.generatePDF(project, settings, canvas);
@@ -4822,11 +4844,15 @@ import { TeamsBridge } from './teams-bridge.js';
             const color = p.color || '#6366f1';
             const h     = estimateHealth(p);
             const name  = escapeHTML(p.name.length > 22 ? p.name.substring(0, 20) + '…' : p.name);
+            const mgr   = (p.manager || '').trim();
             return `
-            <div class="pf-progress-row" title="${escapeHTML(p.name)} — ${pct}%">
+            <div class="pf-progress-row" title="${escapeHTML(p.name)} — ${pct}%${mgr ? ' | PM: ' + mgr : ''}">
                 <div class="pf-progress-label">
                     <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:5px;flex-shrink:0"></span>
-                    <span>${name}</span>
+                    <span style="display:flex;flex-direction:column;gap:0">
+                        <span>${name}</span>
+                        ${mgr ? `<span style="font-size:0.58rem;color:var(--text-muted);margin-top:1px">👤 ${escapeHTML(mgr)}</span>` : ''}
+                    </span>
                 </div>
                 <div class="pf-progress-track">
                     <div class="pf-progress-fill" style="width:${pct}%;background:${color}"></div>
@@ -4836,6 +4862,7 @@ import { TeamsBridge } from './teams-bridge.js';
             </div>`;
         }).join('');
     }
+
 
     /** Mini donut chart on canvas */
     function _pfRenderDonut(index) {
@@ -5164,51 +5191,119 @@ import { TeamsBridge } from './teams-bridge.js';
         </div>`;
     }
 
-    /** Table view — rich project table */
+    /** Table view — rich project table, grouped by Project Manager */
     function _pfRenderTable(index) {
         const tbody = $('portfolioTableBody');
         if (!tbody) return;
         tbody.innerHTML = '';
 
-        index.forEach(p => {
-            const pct      = p.progress || 0;
-            const h        = estimateHealth(p);
-            const startStr = p.startDate  ? new Date(p.startDate).toLocaleDateString()  : '—';
-            const endStr   = p.finishDate ? new Date(p.finishDate).toLocaleDateString() : '—';
-            const budget   = (p.tasks || []).reduce((s, t) => s + (t.cost || 0), 0);
-            const budgetStr = budget > 0 ? (settings.currency || '$') + budget.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—';
-            const healthCls = h.label === 'Healthy' ? 'healthy' : h.label === 'At Risk' ? 'at-risk' : pct >= 100 ? 'complete' : 'critical';
-            // Simple SPI per project index (no full task load here)
-            const spiRaw    = p.spi || null;
-            const spiTxt    = spiRaw ? spiRaw.toFixed(2) : '—';
-            const spiCls    = !spiRaw ? '' : spiRaw >= 1 ? 'pf-spi-good' : spiRaw >= 0.8 ? 'pf-spi-warn' : 'pf-spi-bad';
+        if (index.length === 0) {
+            const emptyRow = document.createElement('tr');
+            emptyRow.innerHTML = `<td colspan="9" style="text-align:center;padding:32px;color:var(--text-muted);font-size:0.85rem">No projects yet — import or create a project to see it here.</td>`;
+            tbody.appendChild(emptyRow);
+            return;
+        }
 
-            const tr = document.createElement('tr');
-            tr.style.cursor = 'pointer';
-            tr.innerHTML = `
-                <td><input type="checkbox" class="pf-compare-cb" data-id="${p.id}"></td>
-                <td class="pf-tbl-proj-cell">
-                    <span class="pf-tbl-dot" style="background:${p.color||'#6366f1'}"></span>
-                    <span class="pf-tbl-name">${escapeHTML(p.name)}</span>
-                </td>
-                <td>${p.taskCount || 0}</td>
-                <td>
-                    <div style="display:flex;align-items:center;gap:6px">
-                        <div style="width:56px;height:4px;background:var(--bg-active,#2a2d3e);border-radius:2px;overflow:hidden;flex-shrink:0">
-                            <div style="width:${pct}%;height:100%;background:${p.color||'#6366f1'};border-radius:2px"></div>
+        // ── Group projects by manager name ──────────────────────
+        const groups = {}; // managerName → [project meta]
+        index.forEach(p => {
+            const mgr = (p.manager || '').trim() || 'Unassigned';
+            if (!groups[mgr]) groups[mgr] = [];
+            groups[mgr].push(p);
+        });
+
+        // Sort manager names alphabetically, but keep "Unassigned" at the end
+        const managerNames = Object.keys(groups).sort((a, b) => {
+            if (a === 'Unassigned') return 1;
+            if (b === 'Unassigned') return -1;
+            return a.localeCompare(b);
+        });
+
+        // ── Render each manager section ─────────────────────────
+        managerNames.forEach((mgrName, gi) => {
+            const projects = groups[mgrName];
+
+            // Manager section header row
+            const initials = mgrName === 'Unassigned' ? '?' :
+                mgrName.split(' ').map(w => w[0] || '').join('').substring(0, 2).toUpperCase();
+            const avatarColor = mgrName === 'Unassigned' ? '#64748b' :
+                ['#6366f1','#3b82f6','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899'][gi % 8];
+
+            const headerRow = document.createElement('tr');
+            headerRow.style.cssText = 'background:var(--bg-tertiary,#1e2130);pointer-events:none;';
+            headerRow.innerHTML = `
+                <td colspan="9" style="padding:10px 12px 8px 12px;border-bottom:1px solid rgba(255,255,255,0.06)">
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <div style="
+                            width:30px;height:30px;border-radius:50%;
+                            background:${avatarColor}22;color:${avatarColor};
+                            border:1.5px solid ${avatarColor}55;
+                            display:flex;align-items:center;justify-content:center;
+                            font-size:0.72rem;font-weight:700;flex-shrink:0
+                        ">${escapeHTML(initials)}</div>
+                        <div>
+                            <div style="font-size:0.82rem;font-weight:700;color:var(--text-primary);line-height:1.2">
+                                ${escapeHTML(mgrName)}
+                            </div>
+                            <div style="font-size:0.68rem;color:var(--text-muted);margin-top:1px">
+                                Project Manager &nbsp;·&nbsp; ${projects.length} project${projects.length !== 1 ? 's' : ''}
+                            </div>
                         </div>
-                        <span style="font-size:0.72rem;white-space:nowrap">${pct}%</span>
+                        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+                            ${mgrName !== 'Unassigned' ? `<span style="font-size:0.65rem;padding:2px 8px;background:${avatarColor}18;color:${avatarColor};border:1px solid ${avatarColor}30;border-radius:20px;font-weight:600">👤 PM</span>` : `<span style="font-size:0.65rem;padding:2px 8px;background:rgba(100,116,139,0.12);color:#64748b;border:1px solid rgba(100,116,139,0.2);border-radius:20px">Unassigned</span>`}
+                        </div>
                     </div>
                 </td>
-                <td class="${spiCls}">${spiTxt}</td>
-                <td><span class="pf-health-badge ${healthCls}">${h.label}</span></td>
-                <td style="font-size:0.74rem;white-space:nowrap">${startStr}</td>
-                <td style="font-size:0.74rem;white-space:nowrap">${endStr}</td>
-                <td style="font-size:0.74rem">${budgetStr}</td>
             `;
-            tr.querySelector('.pf-compare-cb').addEventListener('click', e => e.stopPropagation());
-            tr.addEventListener('dblclick', () => switchProject(p.id));
-            tbody.appendChild(tr);
+            tbody.appendChild(headerRow);
+
+            // Project rows for this manager
+            projects.forEach(p => {
+                const pct      = p.progress || 0;
+                const h        = estimateHealth(p);
+                const startStr = p.startDate  ? new Date(p.startDate).toLocaleDateString()  : '—';
+                const endStr   = p.finishDate ? new Date(p.finishDate).toLocaleDateString() : '—';
+                const budget   = (p.tasks || []).reduce((s, t) => s + (t.cost || 0), 0);
+                const budgetStr = budget > 0 ? (settings.currency || '$') + budget.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—';
+                const healthCls = h.label === 'Healthy' ? 'healthy' : h.label === 'At Risk' ? 'at-risk' : pct >= 100 ? 'complete' : 'critical';
+                const spiRaw    = p.spi || null;
+                const spiTxt    = spiRaw ? spiRaw.toFixed(2) : '—';
+                const spiCls    = !spiRaw ? '' : spiRaw >= 1 ? 'pf-spi-good' : spiRaw >= 0.8 ? 'pf-spi-warn' : 'pf-spi-bad';
+
+                const tr = document.createElement('tr');
+                tr.style.cursor = 'pointer';
+                tr.innerHTML = `
+                    <td><input type="checkbox" class="pf-compare-cb" data-id="${p.id}"></td>
+                    <td class="pf-tbl-proj-cell">
+                        <span class="pf-tbl-dot" style="background:${p.color||'#6366f1'}"></span>
+                        <span class="pf-tbl-name">${escapeHTML(p.name)}</span>
+                    </td>
+                    <td>${p.taskCount || 0}</td>
+                    <td>
+                        <div style="display:flex;align-items:center;gap:6px">
+                            <div style="width:56px;height:4px;background:var(--bg-active,#2a2d3e);border-radius:2px;overflow:hidden;flex-shrink:0">
+                                <div style="width:${pct}%;height:100%;background:${p.color||'#6366f1'};border-radius:2px"></div>
+                            </div>
+                            <span style="font-size:0.72rem;white-space:nowrap">${pct}%</span>
+                        </div>
+                    </td>
+                    <td class="${spiCls}">${spiTxt}</td>
+                    <td><span class="pf-health-badge ${healthCls}">${h.label}</span></td>
+                    <td style="font-size:0.74rem;white-space:nowrap">${startStr}</td>
+                    <td style="font-size:0.74rem;white-space:nowrap">${endStr}</td>
+                    <td style="font-size:0.74rem">${budgetStr}</td>
+                `;
+                tr.querySelector('.pf-compare-cb').addEventListener('click', e => e.stopPropagation());
+                tr.addEventListener('dblclick', () => switchProject(p.id));
+                tbody.appendChild(tr);
+            });
+
+            // Thin separator after each group (except last)
+            if (gi < managerNames.length - 1) {
+                const sep = document.createElement('tr');
+                sep.innerHTML = `<td colspan="9" style="height:4px;background:transparent;border:none;padding:0"></td>`;
+                tbody.appendChild(sep);
+            }
         });
     }
 

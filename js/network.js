@@ -62,6 +62,7 @@
     // false  → show "no links" banner over the diagram.
     // null   → unknown / not yet set (no banner shown).
     let _dependenciesAvailable = null;
+    let _projectStartDate = null; // Actual project start date for date conversion
 
     // Minimap
     const MM = { w: 148, h: 88, pad: 8 };
@@ -190,6 +191,16 @@
             _dependenciesAvailable = null; // unknown — no banner
         }
 
+        // Store the earliest task start date as the project reference date
+        _projectStartDate = null;
+        if (_allTasksRaw.length > 0) {
+            let minTs = Infinity;
+            _allTasksRaw.forEach(t => {
+                if (t.start) { const ts = new Date(t.start).getTime(); if (ts < minTs) minTs = ts; }
+            });
+            if (isFinite(minTs)) _projectStartDate = new Date(minTs);
+        }
+
         // Visible set = non-summary + visible
         _allTasks = _allTasksRaw.filter(t => !t.summary && t.isVisible !== false);
 
@@ -259,10 +270,17 @@
         const floatVals   = _tasks.map(t => t.totalFloat).filter(v => v != null && isFinite(v));
         const avgFloat    = floatVals.length ? Math.round(floatVals.reduce((a,b)=>a+b,0)/floatVals.length) : 0;
 
-        // Critical path length: max EF of non-isolated connected tasks
-        const connectedEFs = _allTasks.filter(t => !t._isolated).map(t => t._ef || 0).filter(isFinite);
-        const fallbackEFs  = _allTasks.map(t => t._ef || 0).filter(isFinite);
-        const critPathLen  = Math.max(...(connectedEFs.length ? connectedEFs : fallbackEFs), 0);
+        // Critical path length: compute actual longest path through critical tasks
+        // Sum durations of tasks with 0 float that form a connected chain.
+        // Use the max EF of critical tasks minus min ES of critical tasks.
+        let critPathLen = 0;
+        if (critTasks.length > 0) {
+            const critEFs = critTasks.map(t => t._ef || 0).filter(isFinite);
+            const critESs = critTasks.map(t => t._es || 0).filter(isFinite);
+            if (critEFs.length > 0 && critESs.length > 0) {
+                critPathLen = Math.max(...critEFs) - Math.min(...critESs);
+            }
+        }
 
         _statsCache = {
             n, critCount: critTasks.length, lateCount: lateTasks.length,
@@ -623,6 +641,45 @@
         _ctx.restore();
     }
 
+    /**
+     * Convert a CPM day-offset to a short date string (e.g. "Apr 26").
+     * Falls back to showing the raw number if no project start date is known.
+     * NOTE: kept for backward-compat; prefer _fmtDate for direct Date values.
+     */
+    function _dayToDate(days) {
+        if (!isFinite(days) || days == null) return '—';
+        if (_projectStartDate) {
+            const d = new Date(_projectStartDate.getTime() + Math.round(days) * 86400000);
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+        return 'd' + Math.round(days);
+    }
+
+    /**
+     * Format an actual Date (or date-like value) to "Apr 26" style.
+     * Used in PERT boxes and tooltip to display real task start/finish dates.
+     */
+    function _fmtDate(d) {
+        if (!d) return '—';
+        try {
+            const dt = new Date(d);
+            if (isNaN(dt.getTime())) return '—';
+            return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        } catch(e) { return '—'; }
+    }
+
+    /**
+     * Add `floatDays` calendar days to a Date and format the result.
+     * Used to compute LS = start + float  and  LF = finish + float.
+     */
+    function _addDaysAndFmt(d, floatDays) {
+        if (!d || !isFinite(floatDays)) return '—';
+        try {
+            const dt = new Date(new Date(d).getTime() + Math.round(floatDays) * 86400000);
+            return _fmtDate(dt);
+        } catch(e) { return '—'; }
+    }
+
     function _drawNormal(nd, D) {
         const {task:t, x, y, w, h} = nd;
         const pct = t.percentComplete || 0;
@@ -632,9 +689,11 @@
         _ctx.fillStyle='rgba(255,255,255,0.04)';
         _ctx.fillRect(x+4,y+rH,w-8,1); _ctx.fillRect(x+4,y+rH*2,w-8,1);
 
-        const esV = t._es!=null?Math.round(t._es):'—';
-        const efV = t._ef!=null?Math.round(t._ef):'—';
-        _ctx.font=`400 8px Inter,sans-serif`; _ctx.fillStyle=C.dim;
+        // Row 1: ES (actual start) | Task name | EF (actual finish)
+        // Use real task dates to avoid off-by-one from calendar-day offset conversion
+        const esV = _fmtDate(t.start);
+        const efV = _fmtDate(t.finish);
+        _ctx.font=`400 7.5px Inter,sans-serif`; _ctx.fillStyle=C.dim;
         _ctx.textAlign='left';  _ctx.textBaseline='top'; _ctx.fillText('ES '+esV, tx, y+5);
         _ctx.textAlign='right'; _ctx.fillText('EF '+efV, x+w-6, y+5);
         _ctx.fillStyle = t.critical ? C.crit : C.txt;
@@ -643,6 +702,7 @@
         const nm = t.name.length>19 ? t.name.slice(0,17)+'…' : t.name;
         _ctx.fillText(nm, x+w/2, y+rH/2);
 
+        // Row 2: progress bar + % + duration
         const bY=y+rH+7, bW=Math.floor(w*0.54), bH=5;
         _ctx.fillStyle='rgba(255,255,255,0.06)'; _rrp(tx,bY,bW,bH,3); _ctx.fill();
         if (pct>0) {
@@ -655,16 +715,18 @@
         _ctx.fillStyle=C.dim; _ctx.textAlign='right';
         _ctx.fillText((t.durationDays||0)+'d', x+w-6, bY+2.5);
 
+        // Row 3: LS | TF | LF
+        // LS = task.start + float days,  LF = task.finish + float days
         const r3=y+rH*2+5;
-        const lsV = t._ls!=null&&isFinite(t._ls)?Math.round(t._ls):'—';
-        const lfV = t._lf!=null&&isFinite(t._lf)?Math.round(t._lf):'—';
-        const tf  = t.totalFloat!=null&&isFinite(t.totalFloat)?Math.round(t.totalFloat):null;
-        _ctx.font=`400 8px Inter,sans-serif`; _ctx.fillStyle=C.dim;
+        const tf = t.totalFloat!=null&&isFinite(t.totalFloat)?Math.round(t.totalFloat):null;
+        const lsV = tf!==null ? _addDaysAndFmt(t.start, tf)  : '—';
+        const lfV = tf!==null ? _addDaysAndFmt(t.finish, tf) : '—';
+        _ctx.font=`400 7.5px Inter,sans-serif`; _ctx.fillStyle=C.dim;
         _ctx.textAlign='left';  _ctx.textBaseline='top'; _ctx.fillText('LS '+lsV, tx, r3);
         _ctx.textAlign='right'; _ctx.fillText('LF '+lfV, x+w-6, r3);
         if (tf!==null) {
             _ctx.fillStyle = tf===0?C.crit:tf<=2?C.late:C.dim;
-            _ctx.textAlign='center'; _ctx.fillText('TF '+tf, x+w/2, r3);
+            _ctx.textAlign='center'; _ctx.fillText('TF '+(tf===0?'0 ⚠':tf+'d'), x+w/2, r3);
         }
         if (tf !== null && tf > 0) {
             const maxF=20, fW=Math.min(tf/maxF,1)*(w-20);
@@ -908,12 +970,17 @@
         const tf = t.totalFloat!=null&&isFinite(t.totalFloat)?Math.round(t.totalFloat):null;
         const sucCount = (_succMap.get(t.uid)||[]).length;
         const preCount = (_predMap.get(t.uid)||[]).length;
+        // Use actual task dates for ES/EF; compute LS/LF as start/finish + float
+        const esStr = _fmtDate(t.start);
+        const efStr = _fmtDate(t.finish);
+        const lsStr = tf!==null ? _addDaysAndFmt(t.start, tf)  : '—';
+        const lfStr = tf!==null ? _addDaysAndFmt(t.finish, tf) : '—';
         const rows = [
             ['Duration',    (t.durationDays||0)+'d'],
             ['Progress',    (t.percentComplete||0)+'%'],
             ['Float',       tf!==null?(tf+'d'+(tf===0?' ⚠ Critical path':'')):'—'],
-            ['ES → EF',     (t._es!=null?Math.round(t._es):'?')+' → '+(t._ef!=null?Math.round(t._ef):'?')],
-            ['LS → LF',     (t._ls!=null&&isFinite(t._ls)?Math.round(t._ls):'?')+' → '+(t._lf!=null&&isFinite(t._lf)?Math.round(t._lf):'?')],
+            ['ES → EF',     esStr+' → '+efStr],
+            ['LS → LF',     lsStr+' → '+lfStr],
             ['Successors',  sucCount+(isBotl?' ⚡ Bottleneck':'')],
             ['Predecessors',preCount],
             ['Resource',    (t.resourceNames||[]).join(', ')||'—'],
