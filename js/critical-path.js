@@ -314,6 +314,31 @@
             task.critical    = task._critical;
         });
 
+        /* ── 7b. Dataverse isCritical override ──
+         * When no predecessor links were resolved (Planner import, no dep data),
+         * CPM marks every isolated task as critical (TF=0), which is misleading.
+         * If Dataverse provided msdyn_iscritical on tasks (Planner Premium / Project
+         * for the Web), use that as the authoritative critical flag instead.
+         * This ensures the correct critical path is shown even before dep links work.
+         */
+        if (!tasks._cpmDepsAvailable) {
+            const dvCritCount = tasks.filter(t => !t.summary && t.isCritical === true).length;
+            if (dvCritCount > 0) {
+                // Dataverse has authoritative critical flags → use them
+                tasks.forEach(task => {
+                    if (task.summary) return;
+                    task._critical = task.isCritical === true;
+                    task.critical  = task._critical;
+                    // Zero float only for truly critical tasks from Dataverse
+                    if (!task._critical) {
+                        task._totalFloat = task.durationDays || 1;
+                        task.totalFloat  = task._totalFloat;
+                    }
+                });
+                console.log(`[CPM] No dep links — using ${dvCritCount} Dataverse msdyn_iscritical flags as critical path`);
+            }
+        }
+
         /* ── 8. Free Float ── */
         tasks.forEach(task => {
             if (task.summary) return;

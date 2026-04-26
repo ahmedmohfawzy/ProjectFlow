@@ -620,12 +620,13 @@ function _getMsal() {
                 Prefer: 'odata.include-annotations="OData.Community.Display.V1.FormattedValue"',
             };
 
-            // 1. Fetch tasks, excluding fields that don't exist in all Dataverse environments (e.g. msdyn_wbsid)
+            // 1. Fetch tasks — include msdyn_iscritical so CPM can use Dataverse's
+            //    own critical path calculation as a fallback when dep links aren't resolved.
             const tasksUrl = `${dataverseUrl}/api/data/v9.2/msdyn_projecttasks`
                 + `?$filter=_msdyn_project_value eq '${projectId}'`
                 + `&$select=msdyn_projecttaskid,msdyn_subject,msdyn_outlinelevel,msdyn_displaysequence,`
                 + `_msdyn_parenttask_value,msdyn_scheduledstart,msdyn_scheduledend,`
-                + `msdyn_duration,msdyn_progress,msdyn_effort,msdyn_description`
+                + `msdyn_duration,msdyn_progress,msdyn_effort,msdyn_description,msdyn_iscritical`
                 + `&$orderby=msdyn_displaysequence asc`
                 + `&$top=500`;
 
@@ -725,6 +726,7 @@ function _getMsal() {
                     effort: dvt.msdyn_effort || 0,
                     priority: null,
                     description: dvt.msdyn_description || '',
+                    isCritical: !!dvt.msdyn_iscritical,  // authoritative from Planner Premium scheduler
                     dvPredecessors: [], // populated below from dependencies
                 });
             });
@@ -733,11 +735,18 @@ function _getMsal() {
             // Planner Premium does NOT support _msdyn_project_value filter on
             // msdyn_projecttaskdependencies → HTTP 400. Instead we filter by
             // successor task GUIDs we already know, in batches of 30.
+            //
+            // IMPORTANT: The correct Dataverse field name is
+            //   msdyn_projecttaskdependencylinktype  (NOT msdyn_linktype)
+            // Using the wrong name causes HTTP 400 which was previously swallowed
+            // silently → dvDeps=[] → zero predecessors stored.
             let dvDeps = [];
             const dvTaskIds = [...dvMap.keys()]; // Dataverse task GUIDs (lowercase)
             if (dvTaskIds.length > 0) {
                 const DEP_CHUNK = 30;
-                const depSelect = '$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,msdyn_linktype';
+                // Field names confirmed against Planner Premium / Project for the Web schema
+                const DEP_LINK_FIELD = 'msdyn_projecttaskdependencylinktype';
+                const depSelect = `$select=msdyn_projecttaskdependencyid,_msdyn_predecessortask_value,_msdyn_successortask_value,${DEP_LINK_FIELD}`;
                 const depChunkPromises = [];
                 for (let ci = 0; ci < dvTaskIds.length; ci += DEP_CHUNK) {
                     const chunk = dvTaskIds.slice(ci, ci + DEP_CHUNK);
@@ -745,9 +754,15 @@ function _getMsal() {
                     const url = `${dataverseUrl}/api/data/v9.2/msdyn_projecttaskdependencies?$filter=${filter}&${depSelect}&$top=500`;
                     depChunkPromises.push(
                         fetch(url, { method: 'GET', headers: dvHeaders })
-                            .then(r => r.ok ? r.json() : Promise.resolve({ value: [] }))
+                            .then(r => {
+                                if (!r.ok) {
+                                    console.warn(`[MSGraph] Dep chunk HTTP ${r.status} — field name or filter may be wrong`);
+                                    return { value: [] };
+                                }
+                                return r.json();
+                            })
                             .then(d => d.value || [])
-                            .catch(() => [])
+                            .catch(e => { console.warn('[MSGraph] Dep chunk error:', e.message); return []; })
                     );
                 }
                 const chunkResults = await Promise.all(depChunkPromises);
@@ -756,6 +771,7 @@ function _getMsal() {
             }
 
             if (dvDeps.length > 0) {
+                // Numeric link-type codes from msdyn_projecttaskdependencylinktype
                 const LINK_TYPES = { 192350000: 'FS', 192350001: 'FF', 192350002: 'SS', 192350003: 'SF' };
                 let depStored = 0, depSkippedNoSucc = 0, depSkippedNoPred = 0;
                 dvDeps.forEach(dep => {
@@ -768,14 +784,14 @@ function _getMsal() {
                         depSkippedNoSucc++;
                         return;
                     }
+                    // Read link type from the correct field (msdyn_projecttaskdependencylinktype)
+                    const rawLinkType = dep.msdyn_projecttaskdependencylinktype ?? dep.msdyn_linktype;
                     dvMap.get(successorId).dvPredecessors.push({
                         dvTaskId:   predecessorId,
-                        linkType:   LINK_TYPES[dep.msdyn_linktype] || 'FS',
-                        lagMinutes: 0, // msdyn_lagduration not fetched (Planner Premium doesn't support it)
+                        linkType:   LINK_TYPES[rawLinkType] || 'FS',
+                        lagMinutes: 0,
                     });
                     depStored++;
-                    // Note: predecessorId is stored but not validated against dvMap here.
-                    // Validation happens later in the Planner-task-to-ProjectFlow-task pass.
                     if (!dvMap.has(predecessorId)) depSkippedNoPred++;
                 });
                 console.log(
@@ -786,11 +802,11 @@ function _getMsal() {
                         : '')
                 );
                 if (depStored === 0) {
-                    console.warn('[MSGraph] ⚠️ No dependencies stored despite records existing — all successor task GUIDs are unknown.'
-                        + ' This usually means Planner task IDs are not linked to Dataverse task GUIDs via creationSource.externalObjectId.');
+                    console.warn('[MSGraph] ⚠️ No dependencies stored despite records existing — all successor task GUIDs unknown.'
+                        + ' Check that Planner task IDs link to Dataverse GUIDs via creationSource.externalObjectId.');
                 }
             } else {
-                console.log('[MSGraph] No task dependencies found in Dataverse — plan may have no predecessors set in Project for the Web.');
+                console.log('[MSGraph] No task dependencies found in Dataverse — plan may have no predecessors set in Planner Premium.');
             }
 
             // Auto-generate WBS IDs from parent-child tree
@@ -1821,6 +1837,7 @@ function _getMsal() {
                 predecessors:   [],
                 isExpanded:     true,
                 isVisible:      true,
+                isCritical:     dvInfo ? dvInfo.isCritical : false,  // from msdyn_iscritical via Dataverse
                 _plannerId:       task.id,
                 _plannerEtag:     task['@odata.etag'],
                 _plannerBucketId: task.bucketId,
